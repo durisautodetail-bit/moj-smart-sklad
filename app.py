@@ -11,7 +11,7 @@ from datetime import datetime
 import time
 
 # --- HLAVNÉ NASTAVENIE ---
-DB_FILE = "sklad_v2.db"  # ZMENA NÁZVU: Týmto vynútime vytvorenie novej, čistej databázy
+DB_FILE = "sklad_v2.db"
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -42,7 +42,6 @@ def clean_json_response(text):
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Tabuľka inventory s vlastníkom (owner)
     c.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +56,6 @@ def init_db():
             datum_pridania TEXT
         )
     ''')
-    # Tabuľka daily_log s vlastníkom (owner)
     c.execute('''
         CREATE TABLE IF NOT EXISTS daily_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,4 +264,49 @@ with tab_scan:
 
     if 'scan_result' in st.session_state:
         edited = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic", use_container_width=True)
-        if st.button("📥 Pridať do môjho skladu", type="primary", use_container_width
+        # TU BOLA CHYBA, TERAZ JE TO OPRAVENÉ:
+        if st.button("📥 Pridať do môjho skladu", type="primary", use_container_width=True):
+            add_to_inventory(edited.to_dict('records'), current_user)
+            del st.session_state.scan_result
+            st.toast("Naskladnené!", icon="✅")
+            st.rerun()
+
+# === TAB 3: SKLAD ===
+with tab_storage:
+    st.subheader(f"📦 Sklad používateľa {current_user}")
+    df_inv = get_inventory(current_user)
+    
+    if not df_inv.empty:
+        st.dataframe(
+            df_inv[['nazov', 'vaha_g', 'kcal_100g']],
+            column_config={
+                "nazov": "Produkt",
+                "vaha_g": st.column_config.NumberColumn("Váha (g)", format="%d g"),
+                "kcal_100g": st.column_config.NumberColumn("Kcal/100g", format="%d")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("Tu nič nie je.")
+
+# === TAB 4: TRÉNER ===
+with tab_coach:
+    st.subheader("🤖 AI Poradca")
+    if st.button("Poradiť", type="primary", use_container_width=True):
+        df_log = get_today_log(current_user)
+        df_inv = get_inventory(current_user)
+        
+        curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
+        rem_kcal = target_kcal - curr_kcal
+        
+        with st.spinner("Analyzujem..."):
+            prompt = f"""
+            Si tréner. KLIENT: {current_user}, Cieľ: {goal}, Limit: {int(target_kcal)}, Zjedol: {int(curr_kcal)}.
+            SKLAD: {df_inv[['nazov', 'vaha_g']].to_string() if not df_inv.empty else "Prázdno"}
+            ÚLOHA: Zhodnoť deň a odporuč jedlo zo skladu.
+            """
+            try:
+                res = coach_model.generate_content(prompt)
+                st.info(res.text)
+            except: st.error("Skús neskôr.")
