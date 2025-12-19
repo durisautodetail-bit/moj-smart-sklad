@@ -235,4 +235,156 @@ with tab_profile:
         p_weight = st.number_input("Váha (kg)", 40.0, 150.0, float(default_weight))
         p_height = st.number_input("Výška (cm)", 140, 220, default_height)
         p_act = st.selectbox("Aktivita", ["Sedavá", "Ľahká", "Stredná", "Vysoká", "Extrémna"], index=["Sedavá", "Ľahká", "Stredná", "Vysoká", "Extrémna"].index(default_activity))
-        p_goal = st.selectbox("Cieľ", ["Udržiavať", "Chudnúť", "Pribrať"], index=["Udržiavať", "
+        p_goal = st.selectbox("Cieľ", ["Udržiavať", "Chudnúť", "Pribrať"], index=["Udržiavať", "Chudnúť", "Pribrať"].index(default_goal))
+        p_allergies = st.multiselect("Intolerancie", ["Laktóza", "Lepok", "Histamín", "Orechy", "Morské plody", "Sója"], default=default_allergies)
+
+    with col_med:
+        st.subheader("🩸 Krvný obraz / Zdravie")
+        st.write("Nahraj správu od lekára a AI ju analyzuje.")
+        med_file = st.file_uploader("Nahraj PDF/FOTO", type=["jpg", "png", "pdf"])
+        p_health_issues = st.text_area("Výsledok analýzy (alebo napíš ručne)", value=default_health, height=150)
+        
+        if med_file and st.button("Analyzovať 🩺"):
+            with st.spinner("Analyzujem..."):
+                img = process_file(med_file)
+                try:
+                    res = model.generate_content([
+                        "Analyzuj lekársku správu. Vypíš len abnormality a nedostatky v bodoch (Slovenčina).", img
+                    ])
+                    p_health_issues = res.text
+                    st.success("Hotovo! Ulož profil.")
+                    # Workaround na zobrazenie nového textu
+                    st.session_state.temp_health = res.text
+                    st.rerun()
+                except Exception as e: st.error(e)
+
+    if st.button("💾 ULOŽIŤ PROFIL", type="primary", use_container_width=True):
+        allergies_str = ",".join(p_allergies)
+        save_user_profile(current_user, p_gender, p_age, p_weight, p_height, p_act, p_goal, allergies_str, p_health_issues)
+        st.toast("Profil uložený!", icon="✅")
+
+# Výpočet cieľov pre ostatné taby
+factor = {"Sedavá": 1.2, "Ľahká": 1.375, "Stredná": 1.55, "Vysoká": 1.725, "Extrémna": 1.9}
+bmr = (10 * p_weight) + (6.25 * p_height) - (5 * p_age) + (5 if p_gender == "Muž" else -161)
+tdee = bmr * factor[p_act]
+target_kcal = tdee - 500 if p_goal == "Chudnúť" else (tdee + 300 if p_goal == "Pribrať" else tdee)
+target_b = (target_kcal * 0.30) / 4
+target_s = (target_kcal * 0.40) / 4
+target_t = (target_kcal * 0.30) / 9
+
+# === SEGMENT 2: PREHĽAD (PÔVODNÝ) ===
+with tab_home:
+    st.subheader(f"Dnešný prehľad")
+    
+    df_log = get_today_log(current_user)
+    curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
+    curr_b = df_log['prijate_b'].sum() if not df_log.empty else 0
+    
+    left = int(target_kcal - curr_kcal)
+    color = "green" if left > 0 else "red"
+    
+    st.markdown(f"""
+    <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; text-align: center;">
+        <h2 style="margin:0; color: #31333F;">Zostáva: <span style="color:{color}">{left} kcal</span></h2>
+        <p style="margin:0;">Cieľ: {int(target_kcal)} kcal</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.progress(min(curr_kcal / target_kcal, 1.0))
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Bielkoviny", f"{int(curr_b)}/{int(target_b)}g")
+    
+    st.divider()
+    st.subheader("🍽️ Rýchle jedenie")
+    df_inv = get_inventory(current_user)
+    if not df_inv.empty:
+        c_f, c_g, c_b = st.columns([3,2,2])
+        sel_food = c_f.selectbox("Jedlo", df_inv['nazov'].unique(), label_visibility="collapsed")
+        item = df_inv[df_inv['nazov'] == sel_food].iloc[0]
+        gr = c_g.number_input("Gramy", 1, int(item['vaha_g']), 100, label_visibility="collapsed")
+        if c_b.button("Zjesť", type="primary", use_container_width=True):
+            eat_item(int(item['id']), gr, current_user)
+            st.toast("Zapísané!", icon="🥗")
+            st.rerun()
+    else:
+        st.info("Sklad je prázdny.")
+
+# === SEGMENT 3: SKENOVANIE (PÔVODNÉ) ===
+with tab_scan:
+    st.subheader("📸 Nahraj nákup")
+    uploaded_files = st.file_uploader("Bločky", type=["jpg", "png", "pdf"], accept_multiple_files=True)
+    
+    if uploaded_files and st.button("Analyzovať", type="primary", use_container_width=True):
+        all_items = []
+        bar = st.progress(0)
+        for i, f in enumerate(uploaded_files):
+            try:
+                img = process_file(f)
+                resp = model.generate_content([
+                    "Spracuj bloček do JSON. Polia: nazov, kategoria, vaha_g (odhad), kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g.", img
+                ])
+                d = json.loads(clean_json_response(resp.text))
+                all_items.extend(d)
+            except: pass
+            bar.progress((i+1)/len(uploaded_files))
+        st.session_state.scan_result = all_items
+
+    if 'scan_result' in st.session_state:
+        edited = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic", use_container_width=True)
+        if st.button("📥 Naskladniť", type="primary", use_container_width=True):
+            add_to_inventory(edited.to_dict('records'), current_user)
+            del st.session_state.scan_result
+            st.toast("Uložené!", icon="✅")
+            st.rerun()
+
+# === SEGMENT 4: SKLAD (VRÁTENÝ!) ===
+with tab_storage:
+    st.subheader(f"📦 Tvoj Sklad")
+    df_inv = get_inventory(current_user)
+    
+    if not df_inv.empty:
+        # Pridaný stĺpec na výber (mazanie)
+        df_inv['Vybrať'] = False
+        edited_df = st.data_editor(
+            df_inv[['Vybrať', 'id', 'nazov', 'vaha_g', 'kcal_100g']],
+            column_config={
+                "nazov": "Produkt",
+                "vaha_g": st.column_config.NumberColumn("Váha (g)", format="%d g"),
+                "kcal_100g": "Kcal/100g"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Tlačidlo na mazanie
+        sel = edited_df[edited_df['Vybrať'] == True]
+        if not sel.empty:
+            if st.button(f"🗑️ Vyhodiť ({len(sel)})", type="secondary"):
+                for i, row in sel.iterrows():
+                    delete_item(row['id'])
+                st.rerun()
+    else:
+        st.info("Sklad je prázdny.")
+
+# === SEGMENT 5: TRÉNER (PÔVODNÝ S VYLEPŠENÍM) ===
+with tab_coach:
+    st.subheader("🤖 Bio-Tréner")
+    if st.button("Poradiť", type="primary", use_container_width=True):
+        df_inv = get_inventory(current_user)
+        inv_str = df_inv[['nazov', 'vaha_g']].to_string() if not df_inv.empty else "Nič"
+        
+        prompt = f"""
+        Si expert. KLIENT: {current_user} ({p_gender}, {p_age}r, {p_goal}).
+        ZDRAVOTNÉ INFO: {p_health_issues}. INTOLERANCIE: {p_allergies}.
+        DENNÝ STAV: {int(curr_kcal)} / {int(target_kcal)} kcal.
+        SKLAD: {inv_str}
+        
+        1. Zhodnoť deň.
+        2. Odporuč jedlo zo skladu (ber ohľad na zdravotné info).
+        """
+        try:
+            with st.spinner("Analyzujem..."):
+                r = coach_model.generate_content(prompt)
+                st.markdown(r.text)
+        except: st.error("Skús neskôr.")
