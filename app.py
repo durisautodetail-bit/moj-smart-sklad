@@ -10,7 +10,9 @@ import sqlite3
 from datetime import datetime
 import time
 
-# --- KONFIGURÁCIA ---
+# --- HLAVNÉ NASTAVENIE ---
+DB_FILE = "sklad_v2.db"  # ZMENA NÁZVU: Týmto vynútime vytvorenie novej, čistej databázy
+
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
@@ -36,11 +38,11 @@ def clean_json_response(text):
         text = text[start_idx:end_idx+1]
     return text
 
-# --- DATABÁZA (S PODPOROU POUŽÍVATEĽOV) ---
+# --- DATABÁZA ---
 def init_db():
-    conn = sqlite3.connect('sklad.db')
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Pridali sme stĺpec 'owner' (vlastník)
+    # Tabuľka inventory s vlastníkom (owner)
     c.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +57,7 @@ def init_db():
             datum_pridania TEXT
         )
     ''')
+    # Tabuľka daily_log s vlastníkom (owner)
     c.execute('''
         CREATE TABLE IF NOT EXISTS daily_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +75,7 @@ def init_db():
     conn.close()
 
 def add_to_inventory(items, owner):
-    conn = sqlite3.connect('sklad.db')
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     for item in items:
@@ -89,16 +92,14 @@ def add_to_inventory(items, owner):
     conn.close()
 
 def eat_item(item_id, grams_eaten, owner):
-    conn = sqlite3.connect('sklad.db')
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # Kontrola, či item patrí userovi
     c.execute("SELECT * FROM inventory WHERE id=? AND owner=?", (item_id, owner))
     item = c.fetchone()
     
     if item:
-        # Indexy sa posunuli o 1 kvôli stĺpcu owner
         # id=0, owner=1, nazov=2, kat=3, vaha=4, kcal=5, b=6, s=7, t=8
         current_weight = item[4]
         ratio = grams_eaten / 100
@@ -118,14 +119,13 @@ def eat_item(item_id, grams_eaten, owner):
     conn.close()
 
 def get_inventory(owner):
-    conn = sqlite3.connect('sklad.db')
-    # Filtrujeme podľa vlastníka
+    conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM inventory WHERE owner=?", conn, params=(owner,))
     conn.close()
     return df
 
 def get_today_log(owner):
-    conn = sqlite3.connect('sklad.db')
+    conn = sqlite3.connect(DB_FILE)
     today = datetime.now().strftime("%Y-%m-%d")
     df = pd.read_sql_query("SELECT * FROM daily_log WHERE datum=? AND owner=?", conn, params=(today, owner))
     conn.close()
@@ -161,12 +161,11 @@ if not st.session_state.username:
             st.rerun()
         else:
             st.warning("Musíš zadať meno.")
-    st.stop() # Zastaví zvyšok aplikácie, kým sa neprihlási
+    st.stop() 
 
-# Ak sme tu, používateľ je prihlásený
 current_user = st.session_state.username
 
-# --- HEADER (Log-out tlačidlo) ---
+# --- HEADER ---
 c_head1, c_head2 = st.columns([3, 1])
 c_head1.caption(f"Prihlásený ako: **{current_user}**")
 if c_head2.button("Odhlásiť sa"):
@@ -197,7 +196,7 @@ tab_home, tab_scan, tab_storage, tab_coach = st.tabs(["🏠 Prehľad", "➕ Sken
 # === TAB 1: PREHĽAD ===
 with tab_home:
     st.markdown(f"### 👋 Ahoj {current_user}, dnešný stav:")
-    df_log = get_today_log(current_user) # Filtrujeme pre usera
+    df_log = get_today_log(current_user)
     
     curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
     curr_b = df_log['prijate_b'].sum() if not df_log.empty else 0
@@ -267,48 +266,4 @@ with tab_scan:
 
     if 'scan_result' in st.session_state:
         edited = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic", use_container_width=True)
-        if st.button("📥 Pridať do môjho skladu", type="primary", use_container_width=True):
-            add_to_inventory(edited.to_dict('records'), current_user) # Ukladáme s menom
-            del st.session_state.scan_result
-            st.toast("Naskladnené!", icon="✅")
-            st.rerun()
-
-# === TAB 3: SKLAD ===
-with tab_storage:
-    st.subheader(f"📦 Sklad používateľa {current_user}")
-    df_inv = get_inventory(current_user)
-    
-    if not df_inv.empty:
-        st.dataframe(
-            df_inv[['nazov', 'vaha_g', 'kcal_100g']],
-            column_config={
-                "nazov": "Produkt",
-                "vaha_g": st.column_config.NumberColumn("Váha (g)", format="%d g"),
-                "kcal_100g": st.column_config.NumberColumn("Kcal/100g", format="%d")
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("Tu nič nie je.")
-
-# === TAB 4: TRÉNER ===
-with tab_coach:
-    st.subheader("🤖 AI Poradca")
-    if st.button("Poradiť", type="primary", use_container_width=True):
-        df_log = get_today_log(current_user)
-        df_inv = get_inventory(current_user)
-        
-        curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
-        rem_kcal = target_kcal - curr_kcal
-        
-        with st.spinner("Analyzujem..."):
-            prompt = f"""
-            Si tréner. KLIENT: {current_user}, Cieľ: {goal}, Limit: {int(target_kcal)}, Zjedol: {int(curr_kcal)}.
-            SKLAD: {df_inv[['nazov', 'vaha_g']].to_string() if not df_inv.empty else "Prázdno"}
-            ÚLOHA: Zhodnoť deň a odporuč jedlo zo skladu.
-            """
-            try:
-                res = coach_model.generate_content(prompt)
-                st.info(res.text)
-            except: st.error("Skús neskôr.")
+        if st.button("📥 Pridať do môjho skladu", type="primary", use_container_width
