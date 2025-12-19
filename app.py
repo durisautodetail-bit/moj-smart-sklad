@@ -11,7 +11,7 @@ from datetime import datetime
 import time
 
 # --- KONFIGURÁCIA ---
-api_key = "AIzaSyAr0Uvsw0CIlWeoJrbnwk7i2jWtyUJ_aaA"
+api_key = st.secrets["GOOGLE_API_KEY"]
 
 try:
     genai.configure(api_key=api_key)
@@ -262,4 +262,5 @@ with tab3:
                 except Exception as e:
                     st.error(f"Chyba: {e}")
         else:
+
             st.warning("Prázdny sklad.")
