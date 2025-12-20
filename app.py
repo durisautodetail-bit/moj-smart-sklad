@@ -17,9 +17,10 @@ try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
     
-    # VRÁTENÉ NA PÔVODNÝ MODEL (Funguje, ale pozor na limit 20 req/deň)
-    model = genai.GenerativeModel("gemini-flash-latest") 
-    coach_model = genai.GenerativeModel("gemini-flash-latest")
+    # POKUS O STABILNÝ MODEL (Limit 1500/deň)
+    # Ak tento model vyhodí chybu, musíme vyriešiť API kľúč, nie meniť model na ten limitovaný.
+    model = genai.GenerativeModel("gemini-1.5-flash") 
+    coach_model = genai.GenerativeModel("gemini-1.5-flash")
     
 except Exception as e:
     st.error(f"Chyba konfigurácie: {e}")
@@ -45,7 +46,6 @@ def clean_json_response(text):
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -177,7 +177,7 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food Final", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v3.3", layout="wide", page_icon="🩸")
 init_db()
 
 # === LOGIN ===
@@ -195,10 +195,10 @@ if not st.session_state.username:
 
 current_user = st.session_state.username
 
-# Načítanie profilu
+# Načítanie profilu z DB
 db_profile = get_user_profile(current_user)
 
-# Logika pre okamžité zobrazenie analýzy krvi
+# Logika pre zobrazenie zdravia (Priorita: Session State -> DB -> Nič)
 if 'temp_health' in st.session_state and st.session_state.temp_health:
     health_text_to_show = st.session_state.temp_health
 else:
@@ -248,19 +248,20 @@ with tab_profile:
         # Tlačidlo analýzy
         if med_file and st.button("Analyzovať 🩺", type="primary"):
             with st.spinner("Analyzujem bio-markery..."):
-                img = process_file(med_file)
                 try:
+                    img = process_file(med_file)
                     res = model.generate_content([
                         "Analyzuj lekársku správu. Vypíš len abnormality a nedostatky v stručných bodoch (Slovenčina). Napíš to ako zoznam varovaní.", img
                     ])
-                    # Uložíme do session state pre okamžité zobrazenie
+                    # Uložíme do session state
                     st.session_state.temp_health = res.text
                     st.toast("Analýza hotová!", icon="🩸")
                     time.sleep(1)
                     st.rerun()
-                except Exception as e: st.error(e)
+                except Exception as e:
+                    st.error(f"Chyba pri analýze: {e}")
         
-        # Text area berie hodnotu z logiky (AI alebo DB)
+        # Text area
         p_health_issues = st.text_area("Výsledok analýzy:", value=health_text_to_show, height=150)
 
     st.divider()
@@ -337,7 +338,8 @@ with tab_scan:
                 ])
                 d = json.loads(clean_json_response(resp.text))
                 all_items.extend(d)
-            except: pass
+            except Exception as e:
+                st.error(f"Chyba pri súbore {f.name}: {e}")
             bar.progress((i+1)/len(uploaded_files))
         st.session_state.scan_result = all_items
 
@@ -369,7 +371,7 @@ with tab_storage:
     else:
         st.info("Sklad je prázdny.")
 
-# === TAB 5: TRÉNER ===
+# === TAB 5: TRÉNER (S OPRAVOU CHÝB) ===
 with tab_coach:
     st.subheader("🤖 Bio-Tréner")
     if st.button("Poradiť", type="primary", use_container_width=True):
@@ -390,4 +392,8 @@ with tab_coach:
             with st.spinner("Analyzujem..."):
                 r = coach_model.generate_content(prompt)
                 st.markdown(r.text)
-        except: st.error("Skús neskôr.")
+        except Exception as e:
+            # TOTO JE KĽÚČOVÉ: Zobrazíme skutočnú chybu, nie "skúste neskôr"
+            st.error(f"⚠️ Chyba AI Trénera: {e}")
+            if "429" in str(e):
+                st.warning("Minul sa denný limit pre AI. Musíš počkať do zajtra alebo zmeniť model.")
