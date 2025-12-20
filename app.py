@@ -16,12 +16,15 @@ DB_FILE = "sklad_v3.db"
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    # Skúsime flash-002, ak nepôjde, vráti sa to na flash-latest,
-    # ale keďže ti to dnes ide, necháme to zatiaľ tak, ako to máš v systéme.
-    model = genai.GenerativeModel("gemini-1.5-flash-latest") 
-    coach_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+    
+    # OPRAVA: Používame čistý názov "gemini-1.5-flash"
+    # Tento model existuje a má limit 1500 dopytov denne.
+    model = genai.GenerativeModel("gemini-1.5-flash") 
+    coach_model = genai.GenerativeModel("gemini-1.5-flash")
+    
 except Exception as e:
     st.error(f"Chyba konfigurácie: {e}")
+
 
 # --- POMOCNÉ FUNKCIE ---
 def optimize_image(image, max_width=800):
