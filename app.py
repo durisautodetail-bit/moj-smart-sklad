@@ -17,14 +17,12 @@ try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
     
-    # OPRAVA: Používame čistý názov "gemini-1.5-flash"
-    # Tento model existuje a má limit 1500 dopytov denne.
-    model = genai.GenerativeModel("gemini-1.5-flash") 
-    coach_model = genai.GenerativeModel("gemini-1.5-flash")
+    # VRÁTENÉ NA PÔVODNÝ MODEL (Funguje, ale pozor na limit 20 req/deň)
+    model = genai.GenerativeModel("gemini-flash-latest") 
+    coach_model = genai.GenerativeModel("gemini-flash-latest")
     
 except Exception as e:
     st.error(f"Chyba konfigurácie: {e}")
-
 
 # --- POMOCNÉ FUNKCIE ---
 def optimize_image(image, max_width=800):
@@ -48,7 +46,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 1. USERS
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -63,8 +60,6 @@ def init_db():
             last_updated TEXT
         )
     ''')
-
-    # 2. INVENTORY
     c.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +74,6 @@ def init_db():
             datum_pridania TEXT
         )
     ''')
-    # 3. LOG
     c.execute('''
         CREATE TABLE IF NOT EXISTS daily_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,7 +90,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- FUNKCIE PRE PROFIL ---
+# --- FUNKCIE ---
 def save_user_profile(username, gender, age, weight, height, activity, goal, allergies, health_issues):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -126,7 +120,6 @@ def get_user_profile(username):
     conn.close()
     return user
 
-# --- FUNKCIE PRE SKLAD ---
 def add_to_inventory(items, owner):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -184,7 +177,7 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v3.2", layout="wide", page_icon="🩸")
+st.set_page_config(page_title="Smart Food Final", layout="wide", page_icon="🥗")
 init_db()
 
 # === LOGIN ===
@@ -202,10 +195,10 @@ if not st.session_state.username:
 
 current_user = st.session_state.username
 
-# Načítanie profilu z DB
+# Načítanie profilu
 db_profile = get_user_profile(current_user)
 
-# Logika: Ak máme čerstvo zanalyzovanú krv v pamäti, použijeme ju. Inak použijeme DB.
+# Logika pre okamžité zobrazenie analýzy krvi
 if 'temp_health' in st.session_state and st.session_state.temp_health:
     health_text_to_show = st.session_state.temp_health
 else:
@@ -231,7 +224,7 @@ with st.sidebar:
 # --- TABS ---
 tab_profile, tab_home, tab_scan, tab_storage, tab_coach = st.tabs(["🧬 Profil", "🏠 Prehľad", "➕ Skenovať", "📦 Sklad", "🤖 Tréner"])
 
-# === TAB 1: PROFIL (Upravené zobrazovanie výsledkov) ===
+# === TAB 1: PROFIL ===
 with tab_profile:
     st.header("🧬 Tvoj Bio-Profil")
     
@@ -249,7 +242,7 @@ with tab_profile:
 
     with col_med:
         st.subheader("🩸 Krvný obraz / Zdravie")
-        st.info("Nahraj správu. AI okamžite vypíše výsledok sem, ale **nezabudni kliknúť ULOŽIŤ PROFIL** dole.")
+        st.info("Nahraj správu. AI vypíše výsledok sem. Potom klikni ULOŽIŤ PROFIL.")
         med_file = st.file_uploader("Nahraj PDF/FOTO", type=["jpg", "png", "pdf"])
         
         # Tlačidlo analýzy
@@ -267,14 +260,13 @@ with tab_profile:
                     st.rerun()
                 except Exception as e: st.error(e)
         
-        # Text area teraz berie hodnotu z premennej health_text_to_show (ktorá je buď z AI alebo z DB)
+        # Text area berie hodnotu z logiky (AI alebo DB)
         p_health_issues = st.text_area("Výsledok analýzy:", value=health_text_to_show, height=150)
 
     st.divider()
     if st.button("💾 ULOŽIŤ PROFIL", type="primary", use_container_width=True):
         allergies_str = ",".join(p_allergies)
         save_user_profile(current_user, p_gender, p_age, p_weight, p_height, p_act, p_goal, allergies_str, p_health_issues)
-        # Po uložení môžeme vymazať temp
         if 'temp_health' in st.session_state: del st.session_state.temp_health
         st.toast("Profil a zdravotné dáta uložené!", icon="✅")
         time.sleep(1)
@@ -287,15 +279,15 @@ tdee = bmr * factor[p_act]
 target_kcal = tdee - 500 if p_goal == "Chudnúť" else (tdee + 300 if p_goal == "Pribrať" else tdee)
 target_b = (target_kcal * 0.30) / 4
 
-# === TAB 2: PREHĽAD (Teraz zobrazuje aj zdravie) ===
+# === TAB 2: PREHĽAD ===
 with tab_home:
     st.subheader(f"Dnešný prehľad")
     
-    # 🔴 NOVÉ: Zobrazenie zdravotnej karty
+    # Zobrazenie zdravotnej karty
     if health_text_to_show and len(health_text_to_show) > 3:
         with st.expander("🩸 TVOJA ZDRAVOTNÁ KARTA (AI)", expanded=True):
             st.error(health_text_to_show)
-            st.caption("AI Tréner bude tieto problémy zohľadňovať pri odporúčaní jedla.")
+            st.caption("AI Tréner bude tieto problémy zohľadňovať.")
     
     df_log = get_today_log(current_user)
     curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
@@ -384,7 +376,6 @@ with tab_coach:
         df_inv = get_inventory(current_user)
         inv_str = df_inv[['nazov', 'vaha_g']].to_string() if not df_inv.empty else "Nič"
         
-        # Tréner vidí tvoj zdravotný stav
         prompt = f"""
         Si expert. KLIENT: {current_user} ({p_gender}, {p_age}r, {p_goal}).
         ⚠️ ZDRAVOTNÉ VAROVANIA (Krvný obraz): {health_text_to_show}.
