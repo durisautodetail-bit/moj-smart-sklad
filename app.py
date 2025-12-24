@@ -11,12 +11,11 @@ from datetime import datetime
 import time
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v5.db"  # Nová DB pre Chat verziu
+DB_FILE = "sklad_v5_1.db"
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    # Používame model, ktorý funguje (gemini-flash-latest)
     model = genai.GenerativeModel("gemini-flash-latest")
     coach_model = genai.GenerativeModel("gemini-flash-latest")
 except Exception as e:
@@ -34,7 +33,7 @@ def optimize_image(image, max_width=800):
 def clean_json_response(text):
     text = text.replace("```json", "").replace("```", "").strip()
     start_idx = text.find('[')
-    if start_idx == -1: start_idx = text.find('{') # Pre istotu, ak vráti objekt nie pole
+    if start_idx == -1: start_idx = text.find('{')
     end_idx = text.rfind(']')
     if end_idx == -1: end_idx = text.rfind('}')
     if start_idx != -1 and end_idx != -1:
@@ -46,7 +45,7 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 1. USERS - Komplexný profil
+    # USERS - Komplexný profil
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -77,7 +76,6 @@ def save_full_profile(data):
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # Rozbalenie dát z JSONu
     username = data.get('username')
     c.execute('''
         INSERT INTO users (username, gender, age, weight, height, activity, goal, target_weight, allergies, dislikes, coach_style, health_issues, ai_strategy, last_updated)
@@ -100,7 +98,7 @@ def save_full_profile(data):
         data.get('dislikes', ''), 
         data.get('coach_style', 'Kamoš'), 
         data.get('health_issues', ''), 
-        data.get('ai_strategy', 'Zatiaľ žiadna'), 
+        data.get('ai_strategy', 'Stratégia sa generuje...'), 
         today
     ))
     conn.commit()
@@ -114,7 +112,7 @@ def get_user_profile(username):
     conn.close()
     return user
 
-# ... (Ostatné DB funkcie sú rovnaké: add_to_inventory, eat_item, delete_item, get_inventory, get_today_log) ...
+# ... Ostatné DB funkcie (Inventory, Log) ...
 def add_to_inventory(items, owner):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -170,7 +168,7 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v5.0", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v5.1", layout="wide", page_icon="🥗")
 init_db()
 
 # === 1. LOGIN ===
@@ -187,118 +185,165 @@ if not st.session_state.username:
 current_user = st.session_state.username
 db_profile = get_user_profile(current_user)
 
-# === 2. ONBOARDING (CHATOVACÍ MODE) ===
-# Ak užívateľ nemá profil v DB, spustí sa chat
+# === 2. ONBOARDING (AK NIE JE PROFIL) ===
 if not db_profile:
     st.title(f"👋 Ahoj {current_user}!")
-    st.progress(0, text="Nastavujem profil...")
+    st.markdown("### Ako si chceš nastaviť svoj profil?")
     
-    # Inicializácia chatu
-    if "onboarding_history" not in st.session_state:
-        st.session_state.onboarding_history = [
-            {"role": "model", "parts": [f"Čau {current_user}, som Max, tvoj nový AI parťák na jedlo! 🍎 Než začneme, potrebujem ťa spoznať. Žiadne nudné formuláre, len pokec. Povedz mi, aký je tvoj hlavný cieľ? (Chudnutie, svaly, alebo len zdravie?)"]}
-        ]
-    
-    # Zobrazenie histórie
-    for msg in st.session_state.onboarding_history:
-        with st.chat_message("ai" if msg["role"] == "model" else "user"):
-            st.write(msg["parts"][0])
-    
-    # Input
-    user_input = st.chat_input("Napíš odpoveď...")
-    
-    if user_input:
-        # 1. Zobraziť user správu
-        with st.chat_message("user"):
-            st.write(user_input)
-        st.session_state.onboarding_history.append({"role": "user", "parts": [user_input]})
+    # Inicializácia stavu rozhodnutia
+    if "onboarding_choice" not in st.session_state:
+        st.session_state.onboarding_choice = None
+
+    # RÁZCESTIE
+    if st.session_state.onboarding_choice is None:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("⚡ **Nemám čas**")
+            st.write("Rýchlo vyplním vek, váhu a cieľ. Žiadne zbytočné otázky.")
+            if st.button("Vybrať FORMULÁR 📝", type="primary", use_container_width=True):
+                st.session_state.onboarding_choice = "form"
+                st.rerun()
         
-        # 2. AI rozmýšľa
-        with st.spinner("Max píše..."):
-            # Vytvoríme prompt, ktorý simuluje trénera
-            chat_context = "\n".join([f"{m['role']}: {m['parts'][0]}" for m in st.session_state.onboarding_history])
-            
-            system_prompt = f"""
-            Si Max, priateľský a moderný nutričný tréner. Vedieš vstupný pohovor s klientom ({current_user}).
-            
-            TVOJA ÚLOHA: Postupne (po jednej otázke) zisti tieto údaje:
-            1. Hlavný cieľ (Chudnutie/Objem/Zdravie)
-            2. Vek, Výška, Váha (Fyzické parametre)
-            3. Životný štýl (Sedavý/Aktívny, či varí alebo nie, koľko má času)
-            4. Chute a Obmedzenia (Sladké/Slané, Alergie, čo neznáša)
-            
-            PRAVIDLÁ:
-            - Buď stručný, vtipný a ľudský (tykaj mu).
-            - Pýtaj sa vždy len na jednu oblasť naraz.
-            - Ak už máš VŠETKY 4 body zistené, napíš PRESNE túto vetu: "Ďakujem, mám všetko! Vytváram tvoj profil..."
-            - Inak polož ďalšiu otázku.
-            
-            História chatu:
-            {chat_context}
-            """
-            
-            try:
-                response = model.generate_content(system_prompt)
-                ai_reply = response.text
-                
-                # Zobraziť AI odpoveď
-                with st.chat_message("ai"):
-                    st.write(ai_reply)
-                st.session_state.onboarding_history.append({"role": "model", "parts": [ai_reply]})
-                
-                # 3. KONTROLA UKONČENIA
-                if "Ďakujem, mám všetko" in ai_reply:
-                    with st.status("Analyzujem a ukladám dáta...", expanded=True):
-                        # EXTRAKCIA DÁT CEZ AI
-                        extract_prompt = f"""
-                        Analyzuj tento rozhovor a vytiahni z neho JSON dáta pre databázu.
-                        Užívateľ: {current_user}
-                        ROZHOVOR:
-                        {chat_context}
-                        
-                        VÝSTUPNÝ JSON FORMÁT (Doplň odhadnuté hodnoty ak chýbajú, buď smart):
-                        {{
-                            "username": "{current_user}",
-                            "gender": "Muž/Žena (odhadni)",
-                            "age": int,
-                            "weight": float (kg),
-                            "height": int (cm),
-                            "activity": "Sedavá/Ľahká/Stredná/Vysoká",
-                            "goal": "Chudnúť/Udržiavať/Pribrať",
-                            "target_weight": float (odhadni podľa cieľa, napr. ak chce chudnúť, daj o 5kg menej),
-                            "allergies": "text (zoznam)",
-                            "dislikes": "text (čo nemá rád)",
-                            "coach_style": "Kamoš",
-                            "health_issues": "",
-                            "ai_strategy": "Napíš stručnú stratégiu (2 vety) na základe zisteného."
-                        }}
-                        """
-                        extraction = model.generate_content(extract_prompt)
-                        json_str = clean_json_response(extraction.text)
-                        profile_data = json.loads(json_str)
-                        
-                        # Uloženie do DB
-                        save_full_profile(profile_data)
-                        st.success("Profil hotový! Vitaj v aplikácii.")
-                        time.sleep(2)
-                        st.rerun()
-                        
-            except Exception as e:
-                st.error(f"Chyba komunikácie: {e}")
-                
-    st.stop() # Zastaví zvyšok appky, kým nie je profil
+        with c2:
+            st.success("💎 **Chcem stratégiu na mieru**")
+            st.write("Pokecám si s Maxom (AI). Pôjdeme do hĺbky (psychológia, návyky, chute).")
+            if st.button("Vybrať POKEC S MAXOM 💬", type="primary", use_container_width=True):
+                st.session_state.onboarding_choice = "chat"
+                st.rerun()
+        st.stop()
 
-# === 3. HLAVNÁ APLIKÁCIA (Prebehne až keď je profil) ===
+    # --- MOŽNOSŤ A: FORMULÁR ---
+    if st.session_state.onboarding_choice == "form":
+        st.subheader("⚡ Rýchle nastavenie")
+        with st.form("quick_setup"):
+            col1, col2 = st.columns(2)
+            with col1:
+                f_gender = st.selectbox("Pohlavie", ["Muž", "Žena"])
+                f_age = st.number_input("Vek", 15, 99, 30)
+                f_weight = st.number_input("Váha (kg)", 40.0, 180.0, 80.0)
+                f_height = st.number_input("Výška (cm)", 120, 220, 180)
+            with col2:
+                f_activity = st.selectbox("Aktivita", ["Sedavá", "Ľahká", "Stredná", "Vysoká"])
+                f_goal = st.selectbox("Cieľ", ["Udržiavať", "Chudnúť", "Pribrať"])
+                f_allergies = st.text_input("Alergie (nepovinné)")
+            
+            submitted = st.form_submit_button("💾 Uložiť a Vstúpiť")
+            if submitted:
+                # Vygenerujeme rýchlu stratégiu
+                strat_prompt = f"Klient: {f_gender}, {f_age}r, {f_weight}kg. Cieľ: {f_goal}. Napíš stručnú stratégiu v 3 bodoch."
+                try:
+                    strat_res = coach_model.generate_content(strat_prompt).text
+                except: strat_res = "Stratégia sa vygeneruje neskôr."
 
-# Načítanie profilu pre výpočty
-# DB: 0:user, 3:weight, 4:height, 2:age, 1:gender, 5:activity, 6:goal
+                data = {
+                    "username": current_user, "gender": f_gender, "age": f_age, 
+                    "weight": f_weight, "height": f_height, "activity": f_activity, 
+                    "goal": f_goal, "target_weight": f_weight, "allergies": f_allergies,
+                    "dislikes": "", "coach_style": "Stručný", "health_issues": "", 
+                    "ai_strategy": strat_res
+                }
+                save_full_profile(data)
+                st.success("Profil uložený!")
+                time.sleep(1)
+                st.rerun()
+
+    # --- MOŽNOSŤ B: HĹBKOVÝ CHAT ---
+    if st.session_state.onboarding_choice == "chat":
+        st.subheader("💬 Interview s Maxom")
+        st.progress(0, text="Spoznávame sa...")
+        
+        if "onboarding_history" not in st.session_state:
+            st.session_state.onboarding_history = [
+                {"role": "model", "parts": [f"Čau {current_user}! Som Max. 🍎 Máme čas, takže poďme do hĺbky. Aby som ti nastavil plán, ktorý nezlyhá po týždni, musím ťa pochopiť.\n\nZačnime základom: **Aký je tvoj cieľ?** Ale nehovor len 'schudnúť'. Povedz mi prečo. Chceš sa cítiť lepšie, zmestiť do obleku, alebo ťa bolia kolená?"]}
+            ]
+        
+        # Zobrazenie histórie
+        for msg in st.session_state.onboarding_history:
+            with st.chat_message("ai" if msg["role"] == "model" else "user"):
+                st.write(msg["parts"][0])
+        
+        user_input = st.chat_input("Odpíš Maxovi...")
+        
+        if user_input:
+            with st.chat_message("user"): st.write(user_input)
+            st.session_state.onboarding_history.append({"role": "user", "parts": [user_input]})
+            
+            with st.spinner("Max premýšľa..."):
+                chat_context = "\n".join([f"{m['role']}: {m['parts'][0]}" for m in st.session_state.onboarding_history])
+                
+                # HĹBKOVÝ SYSTEM PROMPT
+                system_prompt = f"""
+                Si Max, skúsený nutričný kouč. Robíš hĺbkový audit klienta {current_user}.
+                Nikam sa neponáhľaj. Tvojou úlohou je získať komplexný obraz.
+                
+                OBLASTI, KTORÉ MUSÍŠ PREBRAŤ (Postupne):
+                1. Skutočná motivácia a cieľ.
+                2. Fyzické parametre (Vek, Výška, Váha, História váhy - či to kolíše).
+                3. Životný štýl (Spánok, Stres, Práca, Víkendy vs Týždeň).
+                4. Jedlo (Varenie, Čas, Rozpočet, Alergie).
+                5. Psychológia (Chute, Emocionálne jedenie, História diét).
+
+                PRAVIDLÁ:
+                - Pýtaj sa vždy len na jednu tému, ale doplňujúcimi otázkami.
+                - Buď empatický. Ak povie, že zlyhal, povzbuď ho.
+                - Ak zistíš všetko potrebné, napíš PRESNE: "Ďakujem, mám všetko! Vytváram tvoj profil..."
+                
+                História:
+                {chat_context}
+                """
+                try:
+                    res = model.generate_content(system_prompt)
+                    ai_reply = res.text
+                    
+                    with st.chat_message("ai"): st.write(ai_reply)
+                    st.session_state.onboarding_history.append({"role": "model", "parts": [ai_reply]})
+                    
+                    if "Ďakujem, mám všetko" in ai_reply:
+                        with st.status("Analyzujem tvoju psychológiu a dáta...", expanded=True):
+                            extract_prompt = f"""
+                            Analyzuj tento hĺbkový rozhovor a vytvor JSON profil.
+                            Rozhovor: {chat_context}
+                            
+                            JSON FORMÁT:
+                            {{
+                                "username": "{current_user}",
+                                "gender": "Muž/Žena (odhad)",
+                                "age": int,
+                                "weight": float,
+                                "height": int,
+                                "activity": "Sedavá/Ľahká/Stredná/Vysoká",
+                                "goal": "Chudnúť/Udržiavať/Pribrať",
+                                "target_weight": float (odhad),
+                                "allergies": "string",
+                                "dislikes": "string",
+                                "coach_style": "Kamoš/Mentor (podľa tónu klienta)",
+                                "health_issues": "string (stres, spánok, atď)",
+                                "ai_strategy": "Detailná stratégia na základe psychológie klienta (cca 5 viet)."
+                            }}
+                            """
+                            ext_res = model.generate_content(extract_prompt)
+                            json_str = clean_json_response(ext_res.text)
+                            data = json.loads(json_str)
+                            save_full_profile(data)
+                            st.success("Profil pripravený!")
+                            time.sleep(2)
+                            st.rerun()
+                except Exception as e: st.error(e)
+    
+    st.stop()
+
+# === 3. HLAVNÁ APLIKÁCIA ===
+
+# Načítanie profilu
+# DB Indexy: 0:user, 1:gender, 2:age, 3:weight, 4:height, 5:act, 6:goal, 7:target, 8:allergies, 9:dislikes, 10:style, 11:health, 12:strat
 p_weight = db_profile[3]
 p_height = db_profile[4]
 p_age = db_profile[2]
 p_gender = db_profile[1]
 p_act = db_profile[5]
 p_goal = db_profile[6]
-p_strategy = db_profile[12]
+p_strat = db_profile[12]
+p_health = db_profile[11]
 
 # Sidebar
 with st.sidebar:
@@ -306,14 +351,14 @@ with st.sidebar:
     st.caption(f"Cieľ: {p_goal}")
     if st.button("Odhlásiť"):
         st.session_state.username = None
+        st.session_state.onboarding_choice = None
         st.session_state.pop("onboarding_history", None)
         st.rerun()
 
 # Výpočty
 factor = {"Sedavá": 1.2, "Ľahká": 1.375, "Stredná": 1.55, "Vysoká": 1.725, "Extrémna": 1.9}
-act_val = factor.get(p_act, 1.375)
 bmr = (10 * p_weight) + (6.25 * p_height) - (5 * p_age) + (5 if p_gender == "Muž" else -161)
-tdee = bmr * act_val
+tdee = bmr * factor.get(p_act, 1.375)
 target_kcal = tdee - 500 if p_goal == "Chudnúť" else (tdee + 300 if p_goal == "Pribrať" else tdee)
 target_b = (target_kcal * 0.30) / 4
 
@@ -322,10 +367,10 @@ tab_home, tab_chat, tab_scan, tab_storage, tab_profile = st.tabs(["🏠 Prehľad
 
 # --- TAB 1: PREHĽAD ---
 with tab_home:
-    if p_strategy:
-        with st.expander("📋 Tvoja Stratégia (Maxov plán)", expanded=False):
-            st.info(p_strategy)
-            
+    if p_strat:
+        with st.expander("📋 Tvoja Osobná Stratégia", expanded=False):
+            st.write(p_strat)
+    
     df_log = get_today_log(current_user)
     curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
     left = int(target_kcal - curr_kcal)
@@ -348,18 +393,16 @@ with tab_home:
             st.rerun()
     else: st.info("Sklad je prázdny.")
 
-# --- TAB 2: AI ASISTENT (Persistent Chat) ---
+# --- TAB 2: AI ASISTENT (PERSISTENT) ---
 with tab_chat:
     st.header("💬 Max - Tvoj Asistent")
-    st.caption("Napíš mi čokoľvek: 'Nestíham obed', 'Čo navariť?', 'Mám chuť na sladké'...")
+    st.caption("Som tu pre teba 24/7. Pýtaj sa na čokoľvek ohľadom jedla, skladu alebo zdravia.")
     
-    # História bežného chatu
     if "day_chat_history" not in st.session_state:
         st.session_state.day_chat_history = []
         
     for msg in st.session_state.day_chat_history:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+        with st.chat_message(msg["role"]): st.write(msg["content"])
             
     user_msg = st.chat_input("Pýtaj sa Maxa...")
     if user_msg:
@@ -367,30 +410,25 @@ with tab_chat:
         with st.chat_message("user"): st.write(user_msg)
         
         with st.spinner("Max premýšľa..."):
-            # Kontext pre Maxa
             df_inv = get_inventory(current_user)
-            inv_str = df_inv[['nazov', 'vaha_g']].to_string() if not df_inv.empty else "Sklad je prázdny"
+            inv_str = df_inv[['nazov', 'vaha_g']].to_string() if not df_inv.empty else "Prázdno"
             
-            context_prompt = f"""
-            Si Max, nutričný asistent pre klienta: {current_user}.
-            PROFIL KLIENTA: {p_goal}, {p_weight}kg, Stratégia: {p_strategy}.
-            Čo nemá rád: {db_profile[9]}. Alergie: {db_profile[8]}.
+            prompt = f"""
+            Si Max, osobný nutričný asistent pre: {current_user}.
+            PROFIL: {p_goal}, {p_weight}kg. STRATÉGIA: {p_strat}.
+            VAROVANIA: {p_health}. NEMÁ RÁD: {db_profile[9]}.
             
-            AKTUÁLNY STAV DŇA:
-            - Zjedol: {int(curr_kcal)} / {int(target_kcal)} kcal.
+            AKTUÁLNE: Zjedol {int(curr_kcal)} / {int(target_kcal)} kcal.
+            SKLAD: {inv_str}.
             
-            SKLAD POTRAVÍN (Čo má doma):
-            {inv_str}
-            
-            OTÁZKA KLIENTA: "{user_msg}"
-            
-            Odpovedz stručne, prakticky a navrhni riešenie (najlepšie zo skladu, alebo rýchly nákup).
+            OTÁZKA: "{user_msg}"
+            Odpovedz prakticky, stručne a nápomocne.
             """
             try:
-                res = coach_model.generate_content(context_prompt)
+                res = coach_model.generate_content(prompt)
                 st.session_state.day_chat_history.append({"role": "ai", "content": res.text})
                 with st.chat_message("ai"): st.write(res.text)
-            except Exception as e: st.error(str(e))
+            except Exception as e: st.error(e)
 
 # --- TAB 3: SKENOVANIE ---
 with tab_scan:
@@ -423,15 +461,12 @@ with tab_storage:
         if not sel.empty and st.button(f"🗑️ Vyhodiť ({len(sel)})", type="secondary"):
             for i, r in sel.iterrows(): delete_item(r['id'])
             st.rerun()
-    else: st.info("Prázdno.")
+    else: st.info("Sklad je prázdny.")
 
-# --- TAB 5: EDIT PROFILU ---
+# --- TAB 5: PROFIL (READ-ONLY) ---
 with tab_profile:
-    st.header("Nastavenia Profilu")
-    st.caption("Tu si môžeš manuálne upraviť to, čo Max zistil z chatu.")
-    # Jednoduchý editor, ak by AI niečo poplietla
-    new_w = st.number_input("Váha", value=float(p_weight))
-    new_g = st.text_input("Cieľ", value=p_goal)
-    if st.button("Aktualizovať manuálne"):
-        # Tu by sme volali UPDATE SQL, pre jednoduchosť v5.0 nechávame len chat onboarding
-        st.warning("Pre kompletnú zmenu profilu sa odporúča vytvoriť nového usera alebo resetovať DB.")
+    st.header("Tvoj Profil")
+    st.write(f"**Meno:** {current_user}")
+    st.write(f"**Cieľ:** {p_goal}")
+    st.write(f"**Váha:** {p_weight} kg")
+    st.info("Pre zmenu profilu sa odporúča vytvoriť nového používateľa (alebo resetovať dáta).")
