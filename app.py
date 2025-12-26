@@ -83,6 +83,7 @@ def add_to_inventory(items, owner):
     conn.commit()
     conn.close()
 
+# TOTO JE FUNKCIA PRE SIMULÁCIU NÁKUPU
 def seed_test_data(owner):
     nakup = [
         {'nazov': 'Kuracie prsia', 'kategoria': 'Mäso', 'vaha_g': 1500, 'kcal_100g': 165},
@@ -93,7 +94,6 @@ def seed_test_data(owner):
         {'nazov': 'Syr Eidam', 'kategoria': 'Mliečne', 'vaha_g': 1000, 'kcal_100g': 350},
         {'nazov': 'Zemiaky', 'kategoria': 'Zelenina', 'vaha_g': 5000, 'kcal_100g': 77},
         {'nazov': 'Cibuľa', 'kategoria': 'Zelenina', 'vaha_g': 2000, 'kcal_100g': 40},
-        {'nazov': 'Paradajky', 'kategoria': 'Zelenina', 'vaha_g': 1000, 'kcal_100g': 18},
         {'nazov': 'Ryža Basmati', 'kategoria': 'Trvanlivé', 'vaha_g': 2000, 'kcal_100g': 365},
         {'nazov': 'Špagety', 'kategoria': 'Trvanlivé', 'vaha_g': 1500, 'kcal_100g': 350},
         {'nazov': 'Múka hladká', 'kategoria': 'Trvanlivé', 'vaha_g': 2000, 'kcal_100g': 340},
@@ -212,7 +212,7 @@ with tabs[1]:
             st.success("Sklad aktualizovaný!")
             st.rerun()
 
-# === TAB 3: KUCHYŇA (S PLÁNOVAČOM) ===
+# === TAB 3: KUCHYŇA (WIZARD JE TU) ===
 with tabs[2]:
     st.header("👨‍🍳 Inteligentná Kuchyňa")
     inv_df = get_inventory(current_user)
@@ -220,11 +220,11 @@ with tabs[2]:
     if inv_df.empty:
         st.warning("Najprv doplň sklad, aby som ti mohol navrhnúť recepty.")
     else:
-        # VÝBER REŽIMU: TERAZ vs. PLÁNOVAČ
+        # TOTO JE TA KĽÚČOVÁ ČASŤ - VÝBER REŽIMU
         mode = st.radio("Čo chceš robiť?", ["🔥 Hladný TERAZ", "📅 Plánovač (3 Dni)"], horizontal=True)
         st.divider()
 
-        # REŽIM 1: HLADNÝ TERAZ (Pôvodná funkcia)
+        # REŽIM 1: HLADNÝ TERAZ
         if mode == "🔥 Hladný TERAZ":
             st.caption("Rýchly návrh jedla z toho, čo máš v sklade.")
             if st.button("✨ Vygenerovať 3 nápady"):
@@ -250,7 +250,7 @@ with tabs[2]:
                                 st.balloons()
                                 st.rerun()
 
-        # REŽIM 2: PLÁNOVAČ (Nová/Staronová funkcia)
+        # REŽIM 2: PLÁNOVAČ
         elif mode == "📅 Plánovač (3 Dni)":
             st.caption("AI ti vytvorí rozpis jedál na 3 dni dopredu, aby si minul zásoby efektívne.")
             
@@ -334,7 +334,7 @@ with tabs[3]:
         log_df['datum'] = pd.to_datetime(log_df['datum'])
         st.line_chart(log_df.groupby('datum').size())
 
-# === TAB 5: PROFIL ===
+# === TAB 5: PROFIL (S TLAČIDLAMI) ===
 with tabs[4]:
     st.header("👤 Nastavenia")
     st.write(f"Prihlásený užívateľ: **{current_user}**")
