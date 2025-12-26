@@ -11,7 +11,7 @@ import time
 import matplotlib.pyplot as plt
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v6_9.db" # Nová verzia pre opravu Wizarda
+DB_FILE = "sklad_v7_0.db"
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -19,7 +19,7 @@ try:
     model = genai.GenerativeModel("gemini-flash-latest")
     coach_model = genai.GenerativeModel("gemini-flash-latest")
 except Exception as e:
-    st.error(f"Chyba konfigurácie: {e}")
+    st.error(f"Chyba konfigurácie API kľúča: {e}")
 
 # --- POMOCNÉ FUNKCIE ---
 def optimize_image(image, max_width=800):
@@ -31,9 +31,9 @@ def optimize_image(image, max_width=800):
     return image
 
 def clean_json_response(text):
-    # Vyčistenie markdownu
+    # Odstránenie markdownu ```json a ```
     text = text.replace("```json", "").replace("```", "").strip()
-    # Nájdenie začiatku a konca JSON zoznamu
+    # Nájdenie prvého [ a posledného ]
     start_idx = text.find('[')
     end_idx = text.rfind(']')
     if start_idx != -1 and end_idx != -1:
@@ -182,8 +182,26 @@ def process_file(uploaded_file):
         img = Image.open(uploaded_file)
     return optimize_image(img)
 
+def generate_progress_chart(start_weight, current_weight, target_weight, goal_type):
+    fig, ax = plt.subplots(figsize=(6, 2.5))
+    weights = [start_weight, current_weight, target_weight]
+    labels = ["Štart", "Teraz", "Cieľ"]
+    colors = ['#808080', '#FF4B4B', '#4CAF50']
+    ax.bar(labels, weights, color=colors, alpha=0.8)
+    # Ošetrenie pre prípad, že váhy sú 0
+    if max(weights) > 0:
+        min_w, max_w = min([w for w in weights if w > 0]), max(weights)
+        ax.set_ylim(min_w - 5, max_w + 5)
+    ax.grid(axis='y', linestyle=':', alpha=0.3)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    for i, v in enumerate(weights):
+        ax.text(i, v + 0.5, f"{v} kg", ha='center', fontweight='bold', fontsize=9)
+    return fig
+
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v6.9", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v7.0 Debug", layout="wide", page_icon="🥗")
 init_db()
 
 # Session State
@@ -259,29 +277,68 @@ with tabs[0]:
     else:
         st.info("Sklad je prázdny. Začni pridaním potravín.")
 
-# === TAB 2: SKENOVANIE ===
+# === TAB 2: SKENOVANIE (S DEBUGGINGOM) ===
 with tabs[1]:
     st.header("📸 Skenovanie Bločkov")
+    st.caption("Nahraj fotku bločku a AI automaticky vytiahne potraviny.")
+    
     up = st.file_uploader("Nahraj fotku", accept_multiple_files=True)
     if up and st.button("Analyzovať AI"):
         res_items = []
         bar = st.progress(0)
+        
         for i, f in enumerate(up):
             try:
+                # 1. Spracovanie obrázka
                 img = process_file(f)
-                r = model.generate_content(["JSON: nazov, kategoria, vaha_g, kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g.", img])
-                res_items.extend(json.loads(clean_json_response(r.text)))
-            except: pass
+                
+                # 2. Volanie AI (S prísnejším promptom)
+                prompt = """
+                Analyzuj tento bloček a vypíš zoznam potravín.
+                Pre každú položku odhadni kategóriu a nutričné hodnoty na 100g (kcal, b, s, t).
+                Ignoruj nepotravinové položky (tašky, drogéria).
+                
+                DÔLEŽITÉ: Odpovedz LEN čistým JSON formátom (list of objects). Žiadny iný text.
+                JSON structure:
+                [
+                    {"nazov": "Mlieko", "kategoria": "Mliečne", "vaha_g": 1000, "kcal_100g": 42, "bielkoviny_100g": 3.4, "sacharidy_100g": 5, "tuky_100g": 1.5},
+                    {"nazov": "Chlieb", "kategoria": "Pečivo", "vaha_g": 500, "kcal_100g": 260, "bielkoviny_100g": 9, "sacharidy_100g": 49, "tuky_100g": 3}
+                ]
+                """
+                response = model.generate_content([prompt, img])
+                
+                # 3. Debugging výpis (ak by to zlyhalo)
+                with st.expander(f"Raw AI odpoveď pre {f.name} (Debug)"):
+                    st.text(response.text)
+                
+                # 4. Čistenie a parsovanie
+                json_txt = clean_json_response(response.text)
+                items = json.loads(json_txt)
+                
+                if isinstance(items, list):
+                    res_items.extend(items)
+                else:
+                    st.error(f"AI vrátila zlý formát pre {f.name} (nebol to zoznam).")
+
+            except Exception as e:
+                st.error(f"❌ Chyba pri súbore {f.name}: {e}")
+                
             bar.progress((i+1)/len(up))
+            
         st.session_state.scan_result = res_items
-    if 'scan_result' in st.session_state:
+
+    if 'scan_result' in st.session_state and st.session_state.scan_result:
+        st.success(f"Nájdených {len(st.session_state.scan_result)} položiek.")
         ed = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic")
         if st.button("📥 Naskladniť"):
             add_to_inventory(ed.to_dict('records'), current_user)
             del st.session_state.scan_result
+            st.toast("Naskladnené!", icon="✅")
             st.rerun()
+    elif 'scan_result' in st.session_state:
+        st.warning("Neboli nájdené žiadne položky. Skús lepšiu fotku alebo manuálne pridanie.")
 
-# === TAB 3: KUCHYŇA (OPRAVENÝ WIZARD) ===
+# === TAB 3: KUCHYŇA (WIZARD) ===
 with tabs[2]:
     
     # DETAIL RECEPTU
@@ -334,7 +391,7 @@ with tabs[2]:
                         try:
                             res = model.generate_content(prompt)
                             st.session_state.generated_recipes = json.loads(clean_json_response(res.text))
-                        except Exception as e: st.error(f"Chyba AI: {e}")
+                        except Exception as e: st.error(f"AI Error: {e}")
                 
                 if st.session_state.generated_recipes:
                     cols = st.columns(3)
@@ -346,51 +403,41 @@ with tabs[2]:
                                     st.session_state.view_recipe = r
                                     st.rerun()
 
-        # --- WIZARD MODE (OPRAVENÝ) ---
+        # WIZARD MODE
         if mode == "📅 Plánovač (Wizard)":
-            
-            # Fáza 1: Konfigurácia
             if st.session_state.wizard_config is None:
                 days = st.slider("Počet dní", 1, 5, 3)
                 meals = st.multiselect("Jedlá", ["Obed", "Večera"], default=["Obed"])
-                if st.button("Začať Plánovať", type="primary"):
-                    if not meals:
-                        st.error("Vyber aspoň jedno jedlo.")
-                    elif df_inv.empty:
-                        st.warning("Sklad je prázdny, nebude z čoho variť.")
+                if st.button("Začať", type="primary"):
+                    if not meals: st.error("Vyber aspoň jedno jedlo.")
+                    elif df_inv.empty: st.warning("Sklad je prázdny.")
                     else:
                         st.session_state.wizard_config = {"days": days, "meals": meals}
                         st.session_state.wizard_step = 0
                         st.session_state.wizard_plan = []
                         st.session_state.wizard_options = None
+                        st.session_state.wizard_error = None
                         st.rerun()
-            
-            # Fáza 2: Proces
             elif st.session_state.wizard_config:
                 conf = st.session_state.wizard_config
                 total = conf['days'] * len(conf['meals'])
                 curr = st.session_state.wizard_step
                 
-                # Zobraziť chybovú hlášku, ak nastala
                 if st.session_state.wizard_error:
                     st.error(st.session_state.wizard_error)
                     if st.button("Skúsiť znova"):
                         st.session_state.wizard_error = None
                         st.rerun()
-                
-                # Hotovo?
+
                 elif curr >= total:
-                    st.success("✅ Plán je hotový!")
+                    st.success("Plán hotový!")
                     for item in st.session_state.wizard_plan:
                         if st.button(f"{item['label']}: {item['recipe']['title']}", key=f"f_{item['step_id']}"):
                             st.session_state.view_recipe = item['recipe']
                             st.rerun()
-                    if st.button("🔄 Zrušiť a začať znova"): 
+                    if st.button("Zrušiť"): 
                         st.session_state.wizard_config = None
-                        st.session_state.wizard_plan = []
                         st.rerun()
-                
-                # Generovanie a Výber
                 else:
                     day_idx = curr // len(conf['meals'])
                     meal_idx = curr % len(conf['meals'])
@@ -400,14 +447,11 @@ with tabs[2]:
                     
                     st.progress((curr)/total, text=f"Krok {curr+1}/{total}: {label}")
                     
-                    # Generovanie možností
                     if not st.session_state.wizard_options:
-                        with st.spinner(f"Vymýšľam 3 možnosti pre {label}..."):
-                            # Vždy čerstvé dáta zo skladu
+                        with st.spinner("Vymýšľam možnosti..."):
                             df_inv_now = get_inventory(current_user)
                             inv_json = df_inv_now[['id','nazov', 'vaha_g']].to_json(orient='records')
-                            
-                            prompt = f"""
+                            p = f"""
                             SKLAD: {inv_json}.
                             Vymysli 3 RÔZNE recepty pre: {label}.
                             Neľúbi: {p_dislikes}.
@@ -423,22 +467,20 @@ with tabs[2]:
                             ]
                             """
                             try:
-                                res = model.generate_content(prompt)
+                                res = model.generate_content(p)
                                 st.session_state.wizard_options = json.loads(clean_json_response(res.text))
                             except Exception as e:
-                                st.session_state.wizard_error = f"AI zlyhala pri generovaní: {e}"
+                                st.session_state.wizard_error = f"Chyba AI: {e}"
                                 st.rerun()
-                    
-                    # Zobrazenie možností
+
                     if st.session_state.wizard_options:
                         cols = st.columns(3)
-                        for i, opt in enumerate(st.session_state.wizard_options):
+                        for i, o in enumerate(st.session_state.wizard_options):
                             with cols[i]:
                                 with st.container(border=True):
-                                    st.write(f"**{opt['title']}**")
-                                    st.caption(f"{opt.get('kcal')} kcal | {opt.get('time')}")
+                                    st.write(f"**{o['title']}**")
                                     if st.button("Vybrať", key=f"w_{curr}_{i}", use_container_width=True):
-                                        st.session_state.wizard_plan.append({"step_id":curr, "label":label, "recipe":opt})
+                                        st.session_state.wizard_plan.append({"step_id":curr, "label":label, "recipe":o})
                                         st.session_state.wizard_step += 1
                                         st.session_state.wizard_options = None
                                         st.rerun()
@@ -469,6 +511,7 @@ with tabs[3]:
 # === TAB 5: PROFIL & AUDIT (CROSS-SELL) ===
 with tabs[4]:
     st.header("👤 Môj Profil")
+    
     c1, c2 = st.columns(2)
     with c1:
         st.write(f"**Užívateľ:** {current_user}")
@@ -480,7 +523,10 @@ with tabs[4]:
             st.rerun()
             
     st.divider()
+    
+    # === AUDIT ===
     st.subheader("🕵️‍♂️ Nutričný Audit")
+    
     audit_data = get_audit_data(current_user)
     count = len(audit_data)
     
@@ -488,6 +534,7 @@ with tabs[4]:
         st.write("Zatiaľ nemám žiadne dáta. Začni variť!")
     else:
         st.write(f"Mám zaznamenaných **{count} jedál**.")
+        
         if not user_is_premium:
             st.warning("🔒 Výsledky auditu sú zamknuté (Premium).")
         else:
