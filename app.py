@@ -16,7 +16,6 @@ DB_FILE = "sklad_v7_1.db"
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    # Gemini 1.5 Flash - rýchly a efektívny model
     model = genai.GenerativeModel("gemini-1.5-flash")
 except Exception as e:
     st.error(f"Chyba konfigurácie API kľúča: {e}")
@@ -84,7 +83,6 @@ def add_to_inventory(items, owner):
     conn.commit()
     conn.close()
 
-# TOTO JE FUNKCIA NA TESTOVACIE DÁTA (Nákup za 150€)
 def seed_test_data(owner):
     nakup = [
         {'nazov': 'Kuracie prsia', 'kategoria': 'Mäso', 'vaha_g': 1500, 'kcal_100g': 165},
@@ -138,10 +136,13 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- 4. UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v7.2.2", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v7.3", layout="wide", page_icon="🥗")
 init_db()
 
+# Session State inicializácia
 if 'username' not in st.session_state: st.session_state.username = None
+if 'active_plan' not in st.session_state: st.session_state.active_plan = [] # Pre Plánovač
+
 if not st.session_state.username:
     st.title("🥗 Smart Food")
     st.subheader("Tvoja inteligentná kuchyňa")
@@ -189,21 +190,17 @@ with tabs[1]:
             try:
                 img = process_file(f)
                 prompt = "Vráť striktný JSON zoznam potravín z tohto bločku: [{'nazov':str, 'kategoria':str, 'vaha_g':int}]. Ignoruj nepotravinový tovar."
-                
                 response = model.generate_content([prompt, img], safety_settings=SAFETY_SETTINGS)
                 items = json.loads(clean_json_response(response.text))
                 res_items.extend(items)
-                
-                time.sleep(2.0) # Ochrana proti Rate Limit
+                time.sleep(2.0)
                 
             except Exception as e:
                 if "429" in str(e):
                     st.error("⚠️ API je preťažené. Čakám 5 sekúnd...")
                     time.sleep(5)
                 else: st.error(f"Chyba pri súbore {f.name}: {e}")
-            
             progress_bar.progress((i + 1) / len(up))
-            
         st.session_state.scan_result = res_items
 
     if 'scan_result' in st.session_state:
@@ -215,36 +212,83 @@ with tabs[1]:
             st.success("Sklad aktualizovaný!")
             st.rerun()
 
-# === TAB 3: KUCHYŇA ===
+# === TAB 3: KUCHYŇA (S PLÁNOVAČOM) ===
 with tabs[2]:
-    st.header("👨‍🍳 Čo budeme variť?")
+    st.header("👨‍🍳 Inteligentná Kuchyňa")
     inv_df = get_inventory(current_user)
     
     if inv_df.empty:
         st.warning("Najprv doplň sklad, aby som ti mohol navrhnúť recepty.")
     else:
-        if st.button("✨ Vygenerovať nápady zo zásob"):
-            inv_json = inv_df[['id', 'nazov', 'vaha_g']].to_json(orient='records')
-            p = f"Na základe týchto zásob: {inv_json} navrhni 3 rôzne recepty. JSON formát: [{'title':str, 'kcal':int, 'ingredients':[{'name':str, 'amount_g':int, 'id':int}], 'steps':[str]}]"
-            try:
-                with st.spinner("AI šéfkuchár premýšľa..."):
-                    res = model.generate_content(p)
-                    st.session_state.recepty = json.loads(clean_json_response(res.text))
-            except: st.error("Nepodarilo sa spojiť s AI kuchárom.")
+        # VÝBER REŽIMU: TERAZ vs. PLÁNOVAČ
+        mode = st.radio("Čo chceš robiť?", ["🔥 Hladný TERAZ", "📅 Plánovač (3 Dni)"], horizontal=True)
+        st.divider()
 
-    if 'recepty' in st.session_state:
-        cols = st.columns(3)
-        for idx, r in enumerate(st.session_state.recepty):
-            with cols[idx % 3]:
-                with st.container(border=True):
-                    st.subheader(r['title'])
-                    st.write(f"🔥 {r['kcal']} kcal")
-                    with st.expander("Zobraziť postup"):
-                        for s in r['steps']: st.write(f"• {s}")
-                    if st.button(f"Uvariť {idx}", key=f"btn_{idx}"):
-                        cook_recipe_from_stock(r['ingredients'], r['title'], r['kcal'], current_user)
-                        st.balloons()
-                        st.rerun()
+        # REŽIM 1: HLADNÝ TERAZ (Pôvodná funkcia)
+        if mode == "🔥 Hladný TERAZ":
+            st.caption("Rýchly návrh jedla z toho, čo máš v sklade.")
+            if st.button("✨ Vygenerovať 3 nápady"):
+                inv_json = inv_df[['id', 'nazov', 'vaha_g']].to_json(orient='records')
+                p = f"Na základe týchto zásob: {inv_json} navrhni 3 rôzne recepty na TERAZ. JSON formát: [{'title':str, 'kcal':int, 'ingredients':[{'name':str, 'amount_g':int, 'id':int}], 'steps':[str]}]"
+                try:
+                    with st.spinner("Šéfkuchár vymýšľa recepty..."):
+                        res = model.generate_content(p)
+                        st.session_state.recepty = json.loads(clean_json_response(res.text))
+                except: st.error("Nepodarilo sa spojiť s AI kuchárom.")
+            
+            if 'recepty' in st.session_state:
+                cols = st.columns(3)
+                for idx, r in enumerate(st.session_state.recepty):
+                    with cols[idx % 3]:
+                        with st.container(border=True):
+                            st.subheader(r['title'])
+                            st.write(f"🔥 {r['kcal']} kcal")
+                            with st.expander("Postup"):
+                                for s in r['steps']: st.write(f"• {s}")
+                            if st.button(f"Uvariť", key=f"now_{idx}"):
+                                cook_recipe_from_stock(r['ingredients'], r['title'], r['kcal'], current_user)
+                                st.balloons()
+                                st.rerun()
+
+        # REŽIM 2: PLÁNOVAČ (Nová/Staronová funkcia)
+        elif mode == "📅 Plánovač (3 Dni)":
+            st.caption("AI ti vytvorí rozpis jedál na 3 dni dopredu, aby si minul zásoby efektívne.")
+            
+            if st.button("🗓️ Vytvoriť plán na 3 dni"):
+                inv_json = inv_df[['id', 'nazov', 'vaha_g']].to_json(orient='records')
+                # Prompt pre vytvorenie 3 rôznych jedál na 3 dni
+                p = f"""
+                Si plánovač jedál. Mám tento sklad: {inv_json}.
+                Vytvor plán na 3 dni (Obed 1, Obed 2, Obed 3).
+                Musí to byť striktný JSON: 
+                [
+                    {{'day': 'Deň 1', 'title': '...', 'kcal': 0, 'ingredients': [{{'name':'...', 'amount_g':0, 'id':0}}], 'steps': ['...']}},
+                    {{'day': 'Deň 2', 'title': '...', 'kcal': 0, 'ingredients': [{{'name':'...', 'amount_g':0, 'id':0}}], 'steps': ['...']}},
+                    {{'day': 'Deň 3', 'title': '...', 'kcal': 0, 'ingredients': [{{'name':'...', 'amount_g':0, 'id':0}}], 'steps': ['...']}}
+                ]
+                """
+                try:
+                    with st.spinner("Analyzujem zásoby a tvorím plán..."):
+                        res = model.generate_content(p)
+                        st.session_state.active_plan = json.loads(clean_json_response(res.text))
+                except: st.error("Chyba pri generovaní plánu.")
+
+            # Zobrazenie plánu
+            if st.session_state.active_plan:
+                st.subheader("Tvoj plán varenia")
+                for i, item in enumerate(st.session_state.active_plan):
+                    with st.expander(f"📅 {item['day']}: {item['title']} ({item['kcal']} kcal)"):
+                        st.write("**Potrebné suroviny:**")
+                        for ing in item['ingredients']:
+                            st.write(f"- {ing['name']} ({ing['amount_g']}g)")
+                        st.write("**Postup:**")
+                        for s in item['steps']: st.write(f"- {s}")
+                        
+                        if st.button(f"🍽️ Uvariť {item['day']}", key=f"plan_{i}"):
+                            cook_recipe_from_stock(item['ingredients'], item['title'], item['kcal'], current_user)
+                            st.success(f"Jedlo na {item['day']} uvarené a odpísané!")
+                            time.sleep(1)
+                            st.rerun()
 
 # === TAB 4: PREHĽAD ===
 with tabs[3]:
@@ -265,7 +309,6 @@ with tabs[3]:
 
         st.divider()
         cl, cr = st.columns(2)
-
         with cl:
             st.subheader("💡 AI Kuchynský Postreh")
             if st.button("Získať analýzu zvykov"):
@@ -276,7 +319,6 @@ with tabs[3]:
                     res_in = model.generate_content(p_in)
                     st.session_state.last_insight = res_in.text
                 except: st.error("API limit vyčerpaný, skús neskôr.")
-            
             if 'last_insight' in st.session_state:
                 st.info(st.session_state.last_insight)
 
@@ -292,7 +334,7 @@ with tabs[3]:
         log_df['datum'] = pd.to_datetime(log_df['datum'])
         st.line_chart(log_df.groupby('datum').size())
 
-# === TAB 5: PROFIL (S TESTOVACÍMI NÁSTROJMI) ===
+# === TAB 5: PROFIL ===
 with tabs[4]:
     st.header("👤 Nastavenia")
     st.write(f"Prihlásený užívateľ: **{current_user}**")
@@ -301,14 +343,14 @@ with tabs[4]:
     st.subheader("🛠 Vývojárske nástroje")
     st.info("⚠️ Tieto tlačidlá slúžia na rýchle testovanie aplikácie.")
     
-    # TLAČIDLO NA SIMULÁCIU NÁKUPU
     if st.button("🛒 Nasimulovať nákup za 150€", use_container_width=True, type="primary"):
-        seed_test_data(current_user)
-        st.success("✅ Sklad bol naplnený testovacím nákupom!")
-        time.sleep(1)
-        st.rerun()
+        if 'seed_test_data' in globals():
+            seed_test_data(current_user)
+            st.success("✅ Sklad bol naplnený testovacím nákupom!")
+            time.sleep(1)
+            st.rerun()
+        else: st.error("Chyba funkcie seed_test_data")
 
-    # TLAČIDLO NA VYMAZANIE SKLADU
     if st.button("🗑️ Vymazať celý sklad", use_container_width=True):
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
