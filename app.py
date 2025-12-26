@@ -7,11 +7,12 @@ import io
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
+import time
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v6_2.db"
+DB_FILE = "sklad_v6_3.db" # Nová verzia pre istotu
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -41,23 +42,29 @@ def clean_json_response(text):
     return text
 
 def generate_progress_chart(start_weight, current_weight, target_weight, goal_type):
+    # Fix chyby s farbou: '#gray' -> '#808080'
     fig, ax = plt.subplots(figsize=(6, 2.5))
     
-    # Dáta pre graf (Zjednodušená projekcia)
     weights = [start_weight, current_weight, target_weight]
     labels = ["Štart", "Teraz", "Cieľ"]
-    colors = ['#gray', '#FF4B4B', '#4CAF50']
+    # Opravené farby: Sivá, Červená (Streamlit style), Zelená
+    colors = ['#808080', '#FF4B4B', '#4CAF50'] 
     
     ax.bar(labels, weights, color=colors, alpha=0.8)
-    ax.set_ylim(min(weights)-5, max(weights)+5)
+    
+    # Dynamický rozsah osi Y, aby stĺpce "lietali" a nezačínali od nuly (pre lepší detail)
+    min_w = min(weights)
+    max_w = max(weights)
+    ax.set_ylim(min_w - 5, max_w + 5)
+    
     ax.grid(axis='y', linestyle=':', alpha=0.3)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['left'].set_visible(False)
     
-    # Pridanie hodnôt nad stĺpce
+    # Hodnoty nad stĺpcami
     for i, v in enumerate(weights):
-        ax.text(i, v + 0.5, f"{v} kg", ha='center', fontweight='bold')
+        ax.text(i, v + 0.5, f"{v} kg", ha='center', fontweight='bold', fontsize=9)
         
     return fig
 
@@ -84,7 +91,6 @@ def save_full_profile(data):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
-    # Ak je to nový user, start_weight = weight
     start_w = data.get('weight', 80)
     
     c.execute('''
@@ -127,7 +133,6 @@ def add_item_manual(owner, nazov, vaha, kategoria):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
-    # Defaultné makrá pre manuálne pridanie (AI by ich mohlo doplniť neskôr)
     c.execute('''INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g, datum_pridania) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
                  (owner, nazov, kategoria, vaha, 100, 5, 10, 5, today)) 
@@ -199,7 +204,7 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v6.2", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v6.3", layout="wide", page_icon="🥗")
 init_db()
 
 # Session State
@@ -273,6 +278,7 @@ if not db_profile:
 
 # Načítanie dát
 p_weight = db_profile[3]
+# Oprava: Načítanie start_weight (index 16), ak nie je, tak p_weight
 p_start_weight = db_profile[16] if len(db_profile) > 16 and db_profile[16] else p_weight
 p_target_w = db_profile[7]
 p_goal = db_profile[6]
@@ -306,8 +312,10 @@ with tabs[0]:
     col_graph, col_input = st.columns([2, 1])
     with col_graph:
         st.caption("📉 Tvoj progres")
-        fig = generate_progress_chart(p_start_weight, p_weight, p_target_w, p_goal)
-        st.pyplot(fig)
+        try:
+            fig = generate_progress_chart(p_start_weight, p_weight, p_target_w, p_goal)
+            st.pyplot(fig)
+        except Exception as e: st.error(f"Graf sa nepodarilo vykresliť: {e}")
         
     with col_input:
         with st.container(border=True):
@@ -319,7 +327,6 @@ with tabs[0]:
                 time.sleep(0.5)
                 st.rerun()
 
-    # MOTIVÁCIA (Basic vs Premium)
     if user_is_premium:
         st.info(f"💡 **Tip dňa:** Tvoj archetyp je {p_arch}. Nezabudni na bielkoviny!")
     else:
@@ -329,12 +336,9 @@ with tabs[0]:
 with tabs[1]:
     st.header("👨‍🍳 Tvoja Kuchyňa")
     
-    # Výber režimu
     mode = st.radio("Čo ideme robiť?", ["🔥 Hladný TERAZ", "📅 Plánujem TÝŽDEŇ"], horizontal=True)
-    
     df_inv = get_inventory(current_user)
     
-    # --- MODE A: HLADNÝ TERAZ ---
     if mode == "🔥 Hladný TERAZ":
         if df_inv.empty:
             st.warning("⚠️ Prázdny sklad. Najprv pridaj potraviny v záložke 'Sklad' alebo 'Skenovať'.")
@@ -352,7 +356,6 @@ with tabs[1]:
                         st.session_state.generated_recipes = json.loads(clean_json_response(res.text))
                     except: st.error("AI momentálne oddychuje. Skús znova.")
             
-            # Zobrazenie výsledkov
             if st.session_state.generated_recipes:
                 cols = st.columns(3)
                 for i, r in enumerate(st.session_state.generated_recipes):
@@ -367,7 +370,6 @@ with tabs[1]:
                                 st.session_state.generated_recipes = None
                                 st.rerun()
 
-    # --- MODE B: PLÁNOVAČ TÝŽDEŇ ---
     if mode == "📅 Plánujem TÝŽDEŇ":
         with st.container(border=True):
             st.subheader("🛠️ Nastavenie plánu")
@@ -396,7 +398,6 @@ with tabs[1]:
             st.info("💡 Tip: Pre uvarenie konkrétneho jedla sa prepni na 'Hladný TERAZ' alebo si ho manuálne zapíš.")
 
     st.divider()
-    # HISTÓRIA JEDÁL
     with st.expander("📜 História zjedených jedál", expanded=False):
         hist = get_history_log(current_user)
         if not hist.empty:
@@ -408,7 +409,6 @@ with tabs[1]:
 with tabs[2]:
     st.header("📦 Sklad potravín")
     
-    # SEKCIA 1: Rýchle manuálne pridanie
     with st.expander("➕ Pridať manuálne (bez skenovania)", expanded=False):
         with st.form("manual_add"):
             c1, c2, c3 = st.columns([2, 1, 1])
@@ -420,26 +420,20 @@ with tabs[2]:
                 st.toast(f"{m_nazov} pridané!", icon="📦")
                 st.rerun()
 
-    # SEKCIA 2: Tabuľka a Mazanie
     df_inv = get_inventory(current_user)
     if not df_inv.empty:
-        # Prehľadnejšie zobrazenie
         st.write(f"Máš **{len(df_inv)}** položiek v sklade.")
-        
-        # Data Editor s možnosťou mazania
         df_inv['Vyhodiť'] = False
         edited = st.data_editor(
             df_inv[['Vyhodiť', 'id', 'nazov', 'vaha_g', 'kategoria']], 
             column_config={
                 "Vyhodiť": st.column_config.CheckboxColumn("🗑️", help="Označ na vyhodenie", default=False),
-                "id": None # Skryť ID
+                "id": None
             },
             use_container_width=True,
             hide_index=True,
             key="inv_editor"
         )
-        
-        # Tlačidlo na vykonanie zmien
         to_delete = edited[edited['Vyhodiť'] == True]
         if not to_delete.empty:
             if st.button(f"🗑️ Vyhodiť označené ({len(to_delete)})", type="secondary", use_container_width=True):
