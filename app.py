@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v5_6.db" # Pre istotu nová DB, aby sa vyčistili chyby
+DB_FILE = "sklad_v5_7.db" # Pre istotu nová DB
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -169,7 +169,7 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v5.6", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v5.7", layout="wide", page_icon="🥗")
 init_db()
 
 if 'active_tab' not in st.session_state: st.session_state.active_tab = 0
@@ -195,10 +195,7 @@ if st.session_state.show_bridge and 'temp_profile_data' in st.session_state:
     data = st.session_state.temp_profile_data
     st.title("🎉 Profil pripravený!")
     st.info(f"🧬 Tvoj Archetyp: **{data.get('archetype', 'Neznámy')}**")
-    
-    # Bezpečné generovanie grafu
     try:
-        st.write("📉 **Tvoja cesta k úspechu:**")
         fig = generate_progress_chart(data['weight'], data['target_weight'], data['goal'])
         st.pyplot(fig)
     except: pass
@@ -215,7 +212,7 @@ if st.session_state.show_bridge and 'temp_profile_data' in st.session_state:
             st.session_state.active_tab = 0
             st.session_state.show_bridge = False
             st.rerun()
-    st.stop() # Tu sa kód zastaví, ak sme na prechodovej obrazovke
+    st.stop()
 
 db_profile = get_user_profile(current_user)
 
@@ -263,7 +260,6 @@ if not db_profile:
                 st.session_state.temp_profile_data = data
                 st.session_state.show_bridge = True
                 st.rerun()
-        st.stop() # <--- TOTO OPRAVILO CHYBU (Nedovolí kódu padnúť nižšie, kým nie je profil hotový)
 
     # CHAT
     if st.session_state.onboarding_choice == "chat":
@@ -312,10 +308,13 @@ if not db_profile:
                             st.session_state.show_bridge = True
                     st.rerun()
                 except Exception as e: st.error(e)
-        st.stop() # <--- TOTO TIEŽ ISTÍ SITUÁCIU
+    
+    # !!! TOTO JE TÁ BETÓNOVÁ STENA !!!
+    # Ak nemáme profil, zastavujeme tu.
+    st.stop()
 
 # === 3. HLAVNÁ APLIKÁCIA ===
-# Sem sa kód dostane LEN ak db_profile existuje (nie je None)
+# Sem sa dostane kód iba ak už existuje profil
 
 try:
     if db_profile and len(db_profile) > 14 and db_profile[14]:
