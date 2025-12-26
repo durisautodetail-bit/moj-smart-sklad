@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v5_2.db" # Nová verzia DB
+DB_FILE = "sklad_v5_3.db" # Nová verzia pre istotu (čistý štít)
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -46,24 +46,19 @@ def generate_progress_chart(start_weight, target_weight, goal_type):
     """Vygeneruje graf cesty z bodu A do bodu B"""
     fig, ax = plt.subplots(figsize=(6, 3))
     
-    # Logika času: 0.5kg za týždeň je zdravé tempo
+    # Logika času
     diff = abs(start_weight - target_weight)
     weeks_needed = int(diff / 0.5) if diff > 0 else 1
-    if weeks_needed < 4: weeks_needed = 4 # Minimum mesiac pre graf
+    if weeks_needed < 4: weeks_needed = 4
     
     dates = [datetime.now(), datetime.now() + timedelta(weeks=weeks_needed)]
     weights = [start_weight, target_weight]
     
-    # Štýlovanie
-    ax.plot(dates, weights, linestyle='--', marker='o', color='#FF4B4B', linewidth=2, label='Plánovaná cesta')
-    ax.set_title(f"Tvoj plán úspechu ({weeks_needed} týždňov)", fontsize=10)
+    ax.plot(dates, weights, linestyle='--', marker='o', color='#FF4B4B', linewidth=2, label='Plán')
+    ax.set_title(f"Tvoj plán ({weeks_needed} týždňov)", fontsize=10)
     ax.set_ylabel("Váha (kg)")
     ax.grid(True, linestyle=':', alpha=0.6)
-    
-    # Formátovanie dátumu
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
-    
-    # Odstránenie rámov
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     
@@ -74,7 +69,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # USERS - Pridané: archetype
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -88,7 +82,7 @@ def init_db():
             allergies TEXT,
             dislikes TEXT,      
             coach_style TEXT,
-            archetype TEXT,     -- NOVÉ: Psychologický profil
+            archetype TEXT,
             health_issues TEXT,
             ai_strategy TEXT,   
             last_updated TEXT
@@ -128,7 +122,7 @@ def save_full_profile(data):
         data.get('allergies', ''), 
         data.get('dislikes', ''), 
         data.get('coach_style', 'Kamoš'),
-        data.get('archetype', 'Neznámy'), # Default
+        data.get('archetype', 'Neznámy'),
         data.get('health_issues', ''), 
         data.get('ai_strategy', 'Stratégia sa generuje...'), 
         today
@@ -152,7 +146,6 @@ def get_user_profile(username):
     conn.close()
     return user
 
-# ... Ostatné DB funkcie (Inventory, Log) ...
 def add_to_inventory(items, owner):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -208,11 +201,12 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v5.2", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v5.3", layout="wide", page_icon="🥗")
 init_db()
 
 # Session State pre Navigáciu
-if 'active_tab' not in st.session_state: st.session_state.active_tab = 0 # 0 = Home, 2 = Scan
+if 'active_tab' not in st.session_state: st.session_state.active_tab = 0
+if 'show_bridge' not in st.session_state: st.session_state.show_bridge = False
 
 # === 1. LOGIN ===
 if 'username' not in st.session_state: st.session_state.username = None
@@ -226,6 +220,36 @@ if not st.session_state.username:
     st.stop()
 
 current_user = st.session_state.username
+
+# === BRIDGE (PRECHOD) - Musí byť tu, aby sa zobrazil aj po reštarte ===
+if st.session_state.show_bridge and 'temp_profile_data' in st.session_state:
+    st.balloons()
+    data = st.session_state.temp_profile_data
+    
+    st.title("🎉 Profil pripravený!")
+    st.info(f"🧬 Tvoj Archetyp: **{data.get('archetype', 'Neznámy')}**")
+    
+    st.write("📉 **Tvoja cesta k úspechu:**")
+    fig = generate_progress_chart(data['weight'], data['target_weight'], data['goal'])
+    st.pyplot(fig)
+    
+    st.markdown("---")
+    st.subheader("Čo chceš urobiť teraz?")
+    
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("📸 Poďme naskladniť kuchyňu!", type="primary", use_container_width=True):
+            st.session_state.active_tab = 2 # Scan tab
+            st.session_state.show_bridge = False
+            st.rerun()
+    with b2:
+        if st.button("🏠 Iba ukáž prehľad", type="secondary", use_container_width=True):
+            st.session_state.active_tab = 0 # Home tab
+            st.session_state.show_bridge = False
+            st.rerun()
+    st.stop()
+
+# Načítanie profilu
 db_profile = get_user_profile(current_user)
 
 # === 2. ONBOARDING (AK NIE JE PROFIL) ===
@@ -235,8 +259,6 @@ if not db_profile:
     
     if "onboarding_choice" not in st.session_state:
         st.session_state.onboarding_choice = None
-    if "show_bridge" not in st.session_state:
-        st.session_state.show_bridge = False
 
     # RÁZCESTIE
     if st.session_state.onboarding_choice is None:
@@ -250,14 +272,14 @@ if not db_profile:
         
         with c2:
             st.success("💎 **Chcem stratégiu na mieru**")
-            st.write("Pokecám si s Maxom (AI). Získam graf a psychologický profil.")
+            st.write("Pokecám si s Maxom (AI).")
             if st.button("Vybrať POKEC S MAXOM 💬", type="primary", use_container_width=True):
                 st.session_state.onboarding_choice = "chat"
                 st.rerun()
         st.stop()
 
     # --- CESTA A: FORMULÁR ---
-    if st.session_state.onboarding_choice == "form" and not st.session_state.show_bridge:
+    if st.session_state.onboarding_choice == "form":
         st.subheader("⚡ Rýchle nastavenie")
         with st.form("quick_setup"):
             col1, col2 = st.columns(2)
@@ -272,26 +294,26 @@ if not db_profile:
             
             submitted = st.form_submit_button("💾 Uložiť")
             if submitted:
-                # Generovanie dát pre formuláristov
+                # Generovanie dát
                 data = {
                     "username": current_user, "gender": f_gender, "age": f_age, 
                     "weight": f_weight, "height": f_height, "activity": f_activity, 
                     "goal": f_goal, "target_weight": f_weight - 5 if f_goal == "Chudnúť" else f_weight + 5,
                     "allergies": "", "dislikes": "", "coach_style": "Stručný", 
-                    "archetype": "Pragmatik ⚡", # Default pre formulár
+                    "archetype": "Pragmatik ⚡",
                     "health_issues": "", "ai_strategy": "Základná stratégia: Dodržuj kalórie a hýb sa."
                 }
                 save_full_profile(data)
-                st.session_state.temp_profile_data = data # Uložíme si pre bridge
+                st.session_state.temp_profile_data = data
                 st.session_state.show_bridge = True
                 st.rerun()
 
     # --- CESTA B: CHAT ---
-    if st.session_state.onboarding_choice == "chat" and not st.session_state.show_bridge:
+    if st.session_state.onboarding_choice == "chat":
         st.subheader("💬 Interview s Maxom")
         if "onboarding_history" not in st.session_state:
             st.session_state.onboarding_history = [
-                {"role": "model", "parts": [f"Čau {current_user}! Som Max. 🍎 Poďme nastaviť tvoj plán. Napíš mi naraz svoj **vek, výšku, váhu** a hlavne: **Prečo chceš zmeniť postavu?** (Motivácia je kľúč)."]}
+                {"role": "model", "parts": [f"Čau {current_user}! Som Max. 🍎 Poďme nastaviť tvoj plán. Napíš mi naraz svoj **vek, výšku, váhu** a hlavne: **Prečo chceš zmeniť postavu?**"]}
             ]
         
         for msg in st.session_state.onboarding_history:
@@ -306,12 +328,9 @@ if not db_profile:
             with st.spinner("Max analyzuje..."):
                 chat_context = "\n".join([f"{m['role']}: {m['parts'][0]}" for m in st.session_state.onboarding_history])
                 system_prompt = f"""
-                Si Max, nutričný kouč. Robíš audit klienta {current_user}.
-                Zisti postupne: 1. Fyzické parametre + Cieľ, 2. Životný štýl (Varenie, Čas), 3. Chute a Psychológiu.
-                
-                DÔLEŽITÉ: Na základe jeho odpovedí mu v duchu prideľ "Archetyp" (napr. Emocionálny Jedák, Analytik, Zaneprázdnený Manažér).
-                Ak máš všetko, napíš: "Ďakujem, mám všetko! Vytváram tvoj profil..."
-                
+                Si Max, nutričný kouč. Audit klienta {current_user}.
+                Zisti postupne: 1. Fyzické parametre + Cieľ, 2. Životný štýl, 3. Chute.
+                Prideľ "Archetyp". Ak máš všetko, napíš: "Ďakujem, mám všetko! Vytváram tvoj profil..."
                 História: {chat_context}
                 """
                 try:
@@ -328,7 +347,7 @@ if not db_profile:
                                 "username": "{current_user}", "gender": "Muž/Žena", "age": int, "weight": float, "height": int,
                                 "activity": "Stredná", "goal": "Chudnúť", "target_weight": float,
                                 "allergies": "", "dislikes": "", "coach_style": "Kamoš",
-                                "archetype": "Vymysli výstižný názov (2 slová) pre jeho psychologický typ",
+                                "archetype": "Názov (2 slová)",
                                 "health_issues": "", "ai_strategy": "5 viet stratégie."
                             }}
                             """
@@ -341,52 +360,27 @@ if not db_profile:
                 except Exception as e: st.error(e)
         st.stop()
 
-    # --- BRIDGE SCREEN (PRECHOD) ---
-    if st.session_state.show_bridge:
-        st.balloons()
-        data = st.session_state.temp_profile_data
-        
-        st.title("🎉 Profil pripravený!")
-        
-        # Vizualizácia Archetypu
-        st.info(f"🧬 Tvoj Archetyp: **{data.get('archetype', 'Neznámy')}**")
-        
-        # Graf
-        st.write("📉 **Tvoja cesta k úspechu:**")
-        fig = generate_progress_chart(data['weight'], data['target_weight'], data['goal'])
-        st.pyplot(fig)
-        
-        st.markdown("---")
-        st.subheader("Čo chceš urobiť teraz?")
-        
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("📸 Poďme naskladniť kuchyňu!", type="primary", use_container_width=True):
-                st.session_state.active_tab = 2 # Index tabu Skenovať
-                st.session_state.show_bridge = False
-                st.rerun()
-        with b2:
-            if st.button("🏠 Iba ukáž prehľad", type="secondary", use_container_width=True):
-                st.session_state.active_tab = 0 # Index tabu Home
-                st.session_state.show_bridge = False
-                st.rerun()
-        st.stop()
-
 # === 3. HLAVNÁ APLIKÁCIA ===
 
-# RE-CHECK LOGIKA (Po 7 dňoch)
-last_up = datetime.strptime(db_profile[14], "%Y-%m-%d")
-days_diff = (datetime.now() - last_up).days
+# RE-CHECK LOGIKA (BEZPEČNÁ VERZIA)
+# Skontrolujeme, či máme dátum a či je platný
+try:
+    if db_profile and len(db_profile) > 14 and db_profile[14]:
+        last_up = datetime.strptime(db_profile[14], "%Y-%m-%d")
+        days_diff = (datetime.now() - last_up).days
 
-if days_diff >= 7:
-    with st.expander(f"⚠️ **Týždenná kontrola s Maxom!** (Prešlo {days_diff} dní)", expanded=True):
-        st.write(f"Naposledy sme mali **{db_profile[3]} kg**. Ako je to dnes?")
-        new_w_input = st.number_input("Nová váha (kg):", value=db_profile[3], key="recheck_w")
-        if st.button("Aktualizovať váhu"):
-            update_weight(current_user, new_w_input)
-            st.toast("Váha aktualizovaná! Max upravuje plán...", icon="🔄")
-            time.sleep(1)
-            st.rerun()
+        if days_diff >= 7:
+            with st.expander(f"⚠️ **Týždenná kontrola s Maxom!** (Prešlo {days_diff} dní)", expanded=True):
+                st.write(f"Naposledy sme mali **{db_profile[3]} kg**. Ako je to dnes?")
+                new_w_input = st.number_input("Nová váha (kg):", value=db_profile[3], key="recheck_w")
+                if st.button("Aktualizovať váhu"):
+                    update_weight(current_user, new_w_input)
+                    st.toast("Váha aktualizovaná! Max upravuje plán...", icon="🔄")
+                    time.sleep(1)
+                    st.rerun()
+except Exception as e:
+    # Ak sa dátum nedá prečítať, len ticho preskočíme re-check (aby appka nepadla)
+    pass
 
 # Načítanie profilu
 p_weight, p_height, p_age, p_gender = db_profile[3], db_profile[4], db_profile[2], db_profile[1]
@@ -409,19 +403,11 @@ tdee = bmr * factor.get(p_act, 1.375)
 target_kcal = tdee - 500 if p_goal == "Chudnúť" else (tdee + 300 if p_goal == "Pribrať" else tdee)
 target_b = (target_kcal * 0.30) / 4
 
-# TABS (S podporou presmerovania z Bridge)
+# TABS
 tabs = st.tabs(["🏠 Prehľad", "💬 Max (AI)", "➕ Skenovať", "📦 Sklad", "👤 Profil"])
-# Nastavenie aktívneho tabu trikom (Streamlit natívne nepodporuje set_active_tab dobre, 
-# ale môžeme renderovať obsah podľa session_state.active_tab ak by sme nepoužili st.tabs, 
-# pri st.tabs musíme spoliehať na user click alebo zložitejšie JS hacky. 
-# PRE JEDNODUCHOSŤ V TEJTO VERZII: Obsah sa renderuje, ale UI tab sa neprepne vizuálne sám od seba,
-# ak nepoužijeme 'st_pages' alebo podobné libky.
-# Aby sme dodržali "čistý" Streamlit, Bridge vás proste hodí do appky a vy si kliknete).
-# *Poznámka:* V Bridge som nastavil session_state.active_tab, ale pre "čisté" taby to len naznačím toastom.
 
 if 'active_tab' in st.session_state and st.session_state.active_tab == 2:
     st.toast("Prejdi na záložku 'Skenovať' pre naskladnenie!", icon="point_up")
-    # Reset aby to nevyskakovalo stále
     st.session_state.active_tab = 0 
 
 # --- TAB 1: PREHĽAD ---
@@ -511,6 +497,6 @@ with tabs[4]:
     st.header("Tvoj Profil")
     st.info(f"Archetyp: **{p_arch}**")
     st.write(f"Váha: {p_weight} kg -> {target_w} kg")
-    # Zobrazenie grafu znova
+    # Zobrazenie grafu
     fig = generate_progress_chart(p_weight, target_w, p_goal)
     st.pyplot(fig)
