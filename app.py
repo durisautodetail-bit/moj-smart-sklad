@@ -9,7 +9,6 @@ import sqlite3
 from datetime import datetime, timedelta
 import time
 import matplotlib.pyplot as plt
-import collections
 
 # --- KONFIGURÁCIA ---
 DB_FILE = "sklad_v7_1.db" 
@@ -17,11 +16,12 @@ DB_FILE = "sklad_v7_1.db"
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-flash-latest")
-    coach_model = genai.GenerativeModel("gemini-flash-latest")
+    # Používame Flash pre rýchlosť a efektivitu
+    model = genai.GenerativeModel("gemini-1.5-flash")
 except Exception as e:
     st.error(f"Chyba konfigurácie API kľúča: {e}")
 
+# Nastavenia pre stabilitu AI
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -44,53 +44,34 @@ def clean_json_response(text):
     end_idx = text.rfind(']')
     if start_idx != -1 and end_idx != -1:
         return text[start_idx:end_idx+1]
-    # Ak je to objekt a nie zoznam
     start_obj = text.find('{')
     end_obj = text.rfind('}')
     if start_obj != -1 and end_obj != -1:
         return text[start_obj:end_obj+1]
     return text
 
-# --- DATABÁZA (Rozšírená o logovanie času) ---
+# --- DATABÁZA ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY, gender TEXT, age INTEGER, weight REAL, height INTEGER,
-            activity TEXT, goal TEXT, target_weight REAL, allergies TEXT, dislikes TEXT,      
-            coach_style TEXT, archetype TEXT, health_issues TEXT, ai_strategy TEXT, 
-            is_premium INTEGER DEFAULT 0, last_updated TEXT, start_weight REAL
-        )
-    ''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, is_premium INTEGER DEFAULT 0, last_updated TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, nazov TEXT, kategoria TEXT, vaha_g REAL, kcal_100g REAL, bielkoviny_100g REAL, sacharidy_100g REAL, tuky_100g REAL, datum_pridania TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS daily_log (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, nazov TEXT, zjedene_g REAL, prijate_kcal REAL, prijate_b REAL, prijate_s REAL, prijate_t REAL, datum TEXT, cas TEXT)''')
     conn.commit()
     conn.close()
 
-# --- DB FUNKCIE ---
 def create_basic_user(username):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
-    c.execute('''INSERT OR IGNORE INTO users (username, is_premium, last_updated) VALUES (?, ?, ?)''', (username, 0, today))
+    c.execute('INSERT OR IGNORE INTO users (username, is_premium, last_updated) VALUES (?, 0, ?)', (username, datetime.now().strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
-
-def get_user_profile(username):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username=?", (username,))
-    user = c.fetchone()
-    conn.close()
-    return user
 
 def add_item_manual(owner, nazov, vaha, kategoria):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
-    c.execute('''INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g, datum_pridania) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (owner, nazov, kategoria, vaha, 100, 5, 10, 5, today)) 
+    c.execute('INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, datum_pridania) VALUES (?, ?, ?, ?, ?, ?)', 
+              (owner, nazov, kategoria, vaha, 100, datetime.now().strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
 
@@ -99,7 +80,8 @@ def add_to_inventory(items, owner):
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     for item in items:
-        c.execute('''INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g, datum_pridania) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (owner, item.get('nazov'), item.get('kategoria'), item.get('vaha_g'), item.get('kcal_100g'), item.get('bielkoviny_100g'), item.get('sacharidy_100g'), item.get('tuky_100g'), today))
+        c.execute('INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, datum_pridania) VALUES (?, ?, ?, ?, ?, ?)', 
+                  (owner, item.get('nazov'), item.get('kategoria'), item.get('vaha_g'), item.get('kcal_100g', 100), today))
     conn.commit()
     conn.close()
 
@@ -107,25 +89,12 @@ def cook_recipe_from_stock(ingredients_used, recipe_name, total_kcal, owner):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     now = datetime.now()
-    today = now.strftime("%Y-%m-%d")
-    curr_time = now.strftime("%H:%M")
-    c.execute('''INSERT INTO daily_log (owner, nazov, zjedene_g, prijate_kcal, prijate_b, prijate_s, prijate_t, datum, cas) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (owner, recipe_name, 0, total_kcal, 0, 0, 0, today, curr_time))
+    c.execute('INSERT INTO daily_log (owner, nazov, prijate_kcal, datum, cas) VALUES (?, ?, ?, ?, ?)', 
+              (owner, recipe_name, total_kcal, now.strftime("%Y-%m-%d"), now.strftime("%H:%M")))
     for ing in ingredients_used:
         if ing.get('id'):
-            c.execute("SELECT vaha_g FROM inventory WHERE id=?", (ing['id'],))
-            row = c.fetchone()
-            if row:
-                new_w = row[0] - ing['amount_g']
-                if new_w <= 0: c.execute("DELETE FROM inventory WHERE id=?", (ing['id'],))
-                else: c.execute("UPDATE inventory SET vaha_g=? WHERE id=?", (new_w, ing['id']))
-    conn.commit()
-    conn.close()
-
-def delete_item(item_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM inventory WHERE id=?", (item_id,))
+            c.execute("UPDATE inventory SET vaha_g = vaha_g - ? WHERE id = ?", (ing['amount_g'], ing['id']))
+            c.execute("DELETE FROM inventory WHERE vaha_g <= 0")
     conn.commit()
     conn.close()
 
@@ -144,175 +113,163 @@ def get_full_log(owner):
 def process_file(uploaded_file):
     if uploaded_file.type == "application/pdf":
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-        page = doc.load_page(0); pix = page.get_pixmap(); img = Image.open(io.BytesIO(pix.tobytes("png")))
+        pix = doc.load_page(0).get_pixmap()
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
     else: img = Image.open(uploaded_file)
     return optimize_image(img)
 
-# --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v7.2", layout="wide", page_icon="🥗")
+# --- UI START ---
+st.set_page_config(page_title="Smart Food v7.2.1", layout="wide", page_icon="🥗")
 init_db()
 
 if 'username' not in st.session_state: st.session_state.username = None
 if not st.session_state.username:
-    col1, col2 = st.columns([1, 2])
-    with col1: st.image("https://cdn-icons-png.flaticon.com/512/2927/2927347.png", width=100)
-    with col2: st.title("Smart Food"); st.write("Tvoja inteligentná chladnička.")
-    name_input = st.text_input("Zadaj meno:", placeholder="Napr. Jakub")
-    if st.button("🚀 Vstúpiť", type="primary", use_container_width=True):
-        if name_input: st.session_state.username = name_input; create_basic_user(name_input); st.rerun()
+    st.title("🥗 Smart Food")
+    name = st.text_input("Zadaj meno:")
+    if st.button("Vstúpiť") and name:
+        st.session_state.username = name
+        create_basic_user(name)
+        st.rerun()
     st.stop()
 
 current_user = st.session_state.username
 tabs = st.tabs(["📦 Sklad", "➕ Skenovať", "👨‍🍳 Kuchyňa", "📊 Prehľad", "👤 Profil"])
 
-# === TAB 1: SKLAD === (Ponechané podľa v7.1)
+# === TAB 1: SKLAD ===
 with tabs[0]:
-    st.header(f"📦 Sklad ({current_user})")
+    st.header("📦 Aktuálny Sklad")
     df_inv = get_inventory(current_user)
-    with st.expander("➕ Rýchlo pridať"):
-        with st.form("manual"):
-            c_n, c_v, c_k = st.columns([2,1,1])
-            m_n = c_n.text_input("Čo?")
-            m_v = c_v.number_input("Gramy", 1, 5000, 100)
-            m_k = c_k.selectbox("Druh", ["Mliečne", "Mäso", "Zelenina", "Ovocie", "Trvanlivé", "Iné"])
-            if st.form_submit_button("Pridať"): add_item_manual(current_user, m_n, m_v, m_k); st.rerun()
+    with st.expander("➕ Pridať manuálne"):
+        with st.form("manual_add"):
+            n = st.text_input("Názov")
+            v = st.number_input("Gramy", 1, 5000, 100)
+            k = st.selectbox("Kategória", ["Mäso", "Mliečne", "Zelenina", "Ovocie", "Trvanlivé", "Iné"])
+            if st.form_submit_button("Uložiť"):
+                add_item_manual(current_user, n, v, k)
+                st.rerun()
     
     if not df_inv.empty:
-        df_inv['Del'] = False
-        edited = st.data_editor(df_inv[['Del', 'id', 'nazov', 'vaha_g', 'kategoria']], use_container_width=True, hide_index=True)
-        if edited[edited['Del']==True].any().any():
-            for i, r in edited[edited['Del']==True].iterrows(): delete_item(r['id'])
-            st.rerun()
-    else: st.info("Sklad je prázdny.")
+        st.data_editor(df_inv[['id', 'nazov', 'vaha_g', 'kategoria']], use_container_width=True, hide_index=True)
+    else: st.info("Sklad je prázdny. Naskenuj bloček!")
 
-# === TAB 2: SKENOVANIE === (Ponechané podľa v7.1)
+# === TAB 2: SKENOVANIE (FIXED RATE LIMIT) ===
 with tabs[1]:
     st.header("📸 Sherlock Sken")
+    st.write("Skener s ochranou proti preťaženiu API.")
     up = st.file_uploader("Nahraj bločky", accept_multiple_files=True)
-    if up and st.button("Analyzovať AI"):
+    
+    if up and st.button("Analyzovať cez AI"):
         res_items = []
-        for f in up:
-            img = process_file(f)
-            p = "Vráť JSON zoznam potravín z bločku: [{'nazov':str, 'kategoria':str, 'vaha_g':int, 'kcal_100g':int, 'bielkoviny_100g':float, 'sacharidy_100g':float, 'tuky_100g':float}]. Ak nič nevidíš, vráť []."
-            r = model.generate_content([p, img], safety_settings=SAFETY_SETTINGS)
-            try: items = json.loads(clean_json_response(r.text)); res_items.extend(items)
-            except: st.error(f"Chyba pri {f.name}")
+        progress_bar = st.progress(0)
+        
+        for i, f in enumerate(up):
+            try:
+                img = process_file(f)
+                prompt = "Vráť JSON zoznam potravín: [{'nazov':str, 'kategoria':str, 'vaha_g':int}]. Iba JSON."
+                
+                # Volanie AI
+                response = model.generate_content([prompt, img], safety_settings=SAFETY_SETTINGS)
+                items = json.loads(clean_json_response(response.text))
+                res_items.extend(items)
+                
+                # OCHRANA: Krátka pauza medzi súbormi
+                time.sleep(1.5) 
+                
+            except Exception as e:
+                if "429" in str(e):
+                    st.error(f"⚠️ Limit API vyčerpaný. Čakám na uvoľnenie...")
+                    time.sleep(5)
+                else: st.error(f"Chyba pri {f.name}: {e}")
+            
+            progress_bar.progress((i + 1) / len(up))
+            
         st.session_state.scan_result = res_items
 
     if 'scan_result' in st.session_state:
+        st.subheader("Kontrola údajov")
         ed = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic")
-        if st.button("📥 Naskladniť všetko"): add_to_inventory(ed.to_dict('records'), current_user); del st.session_state.scan_result; st.rerun()
+        if st.button("📥 Potvrdiť a Naskladniť"):
+            add_to_inventory(ed.to_dict('records'), current_user)
+            del st.session_state.scan_result
+            st.rerun()
 
-# === TAB 3: KUCHYŇA === (Ponechané podľa v7.1)
+# === TAB 3: KUCHYŇA ===
 with tabs[2]:
-    if 'view_recipe' in st.session_state and st.session_state.view_recipe:
-        r = st.session_state.view_recipe
-        if st.button("⬅️ Späť"): st.session_state.view_recipe = None; st.rerun()
-        st.subheader(r['title'])
-        if st.button("🍽️ UVARIŤ (Odpísať zo skladu)"):
-            cook_recipe_from_stock(r['ingredients'], r['title'], r['kcal'], current_user)
-            st.success("Uvarené!"); st.session_state.view_recipe = None; st.rerun()
-        st.write(r['steps'])
+    st.header("👨‍🍳 Inteligentný Šéfkuchár")
+    inv_df = get_inventory(current_user)
+    
+    if inv_df.empty:
+        st.warning("Sklad je prázdny, AI nemá z čoho variť.")
     else:
-        st.header("👨‍🍳 Kuchyňa")
-        if st.button("✨ Vygenerovať recepty zo skladu"):
-            inv = get_inventory(current_user)[['id', 'nazov', 'vaha_g']].to_json()
-            p = f"Na základe skladu {inv} navrhni 3 recepty. JSON: [{{'title':str, 'kcal':int, 'ingredients':[], 'steps':[]}}]"
-            res = model.generate_content(p)
-            st.session_state.recepty = json.loads(clean_json_response(res.text))
-        
-        if 'recepty' in st.session_state:
-            for rec in st.session_state.recepty:
-                if st.button(rec['title']): st.session_state.view_recipe = rec; st.rerun()
+        if st.button("✨ Čo môžem uvariť?"):
+            inv_json = inv_df[['id', 'nazov', 'vaha_g']].to_json(orient='records')
+            p = f"Na základe skladu {inv_json} navrhni 3 recepty. JSON: [{{'title':str, 'kcal':int, 'ingredients':[{'name':str, 'amount_g':int, 'id':int}], 'steps':[str]}}]"
+            try:
+                res = model.generate_content(p)
+                st.session_state.recepty = json.loads(clean_json_response(res.text))
+            except: st.error("API Error pri generovaní receptov.")
 
-# === TAB 4: PREHĽAD (NOVÁ VERZIA v7.2) ===
+    if 'recepty' in st.session_state:
+        for r in st.session_state.recepty:
+            with st.expander(f"📖 {r['title']} ({r['kcal']} kcal)"):
+                st.write("**Postup:**")
+                for step in r['steps']: st.write(f"- {step}")
+                if st.button(f"Uvariť {r['title']}", key=r['title']):
+                    cook_recipe_from_stock(r['ingredients'], r['title'], r['kcal'], current_user)
+                    st.success("Suroviny odpočítané!"); time.sleep(1); st.rerun()
+
+# === TAB 4: PREHĽAD (FIXED INSIGHT) ===
 with tabs[3]:
     st.header("📊 Kitchen Intelligence")
-    
     log_df = get_full_log(current_user)
     inv_df = get_inventory(current_user)
 
     if log_df.empty:
-        st.info("Zatiaľ si nič neuvaril. Údaje sa zobrazia po prvom varení.")
+        st.info("Var častejšie, aby sme mali čo analyzovať!")
     else:
-        # --- HORIZONTÁLNE METRIKY ---
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Uvarených jedál", len(log_df))
-        c2.metric("Položiek v sklade", len(inv_df))
-        
-        # Výpočet obľúbenej kategórie
-        fav_cat = inv_df['kategoria'].mode()[0] if not inv_df.empty else "N/A"
-        c3.metric("Dominantná zásoba", fav_cat)
-        
-        # Odhad najčastejšieho času varenia
-        log_df['hodina'] = log_df['cas'].str.split(':').str[0].astype(int)
-        busy_hour = log_df['hodina'].mode()[0]
-        c4.metric("Špička v kuchyni", f"{busy_hour}:00")
+        # Horné metriky
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Počet jedál", len(log_df))
+        m2.metric("Položky v sklade", len(inv_df))
+        if 'cas' in log_df.columns:
+            peak = log_df['cas'].str.split(':').str[0].mode()[0]
+            m3.metric("Najčastejší čas", f"{peak}:00")
 
         st.divider()
+        c_left, c_right = st.columns(2)
 
-        col_left, col_right = st.columns([1, 1])
-
-        with col_left:
-            st.subheader("🥗 Tvoj Chuťový Profil")
-            # Analýza slov v názvoch jedál pre určenie "DNA"
-            all_titles = " ".join(log_df['nazov'].tolist()).lower()
+        with c_left:
+            st.subheader("💡 AI Kuchynský Insight")
+            # AI voláme iba po kliknutí, aby sme neplytvali limitom pri každom prepnutí tabu
+            if st.button("Generovať analýzu stravovania"):
+                try:
+                    with st.spinner("Analyzujem tvoje zvyky..."):
+                        h_str = log_df[['nazov', 'datum']].tail(5).to_string()
+                        s_str = inv_df[['nazov', 'kategoria']].to_string()
+                        p_in = f"Analyzuj históriu: {h_str} a sklad: {s_str}. Napíš vtipný a užitočný postreh v 2 vetách."
+                        res_in = model.generate_content(p_in)
+                        st.session_state.last_insight = res_in.text
+                except: st.error("API je momentálne vyťažené.")
             
-            # Jednoduchá vizualizácia kategórií skladu
-            if not inv_df.empty:
-                cat_counts = inv_df['kategoria'].value_counts()
-                fig, ax = plt.subplots(figsize=(5, 3))
-                cat_counts.plot(kind='pie', autopct='%1.1f%%', ax=ax, colors=['#4CAF50', '#FFC107', '#2196F3', '#FF5722', '#9C27B0'])
-                ax.set_ylabel('')
-                st.pyplot(fig)
+            if 'last_insight' in st.session_state:
+                st.info(st.session_state.last_insight)
 
-        with col_right:
-            st.subheader("🤖 AI Insight")
-            # Gemini analyzuje históriu a dáva tip
-            history_str = log_df[['nazov', 'datum']].tail(10).to_string()
-            inv_str = inv_df[['nazov', 'vaha_g']].to_string()
-            
-            p_insight = f"""
-            Ako inteligentný kuchynský asistent analyzuj tieto dáta:
-            História varenia: {history_str}
-            Aktuálny sklad: {inv_str}
-            
-            Napíš JEDNU vtipnú a JEDNU užitočnú vetu (insight) pre užívateľa. 
-            Napr. o tom, že varí stále to isté, alebo že mu v sklade niečo hnije, alebo kedy najčastejšie varí.
-            Odpovedaj v slovenčine.
-            """
-            try:
-                with st.spinner("AI premýšľa..."):
-                    insight_res = model.generate_content(p_insight)
-                    st.info(insight_res.text)
-            except:
-                st.write("AI asistent je momentálne zaneprázdnený umývaním riadu.")
+        with c_right:
+            st.subheader("⌛ Ležiaky v sklade")
+            inv_df['datum_pridania'] = pd.to_datetime(inv_df['datum_pridania'])
+            inv_df['dni'] = (datetime.now() - inv_df['datum_pridania']).dt.days
+            oldest = inv_df.sort_values(by='dni', ascending=False).head(3)
+            for _, row in oldest.iterrows():
+                st.warning(f"**{row['nazov']}** (v sklade {row['dni']} dní)")
 
-        st.divider()
-        
-        # --- SKLADOVÁ EFEKTIVITA ---
-        st.subheader("⏳ Ležiaky v sklade (Potrebné spotrebovať)")
-        inv_df['datum_pridania'] = pd.to_datetime(inv_df['datum_pridania'])
-        inv_df['dni_v_sklade'] = (datetime.now() - inv_df['datum_pridania']).dt.days
-        leziaky = inv_df.sort_values(by='dni_v_sklade', ascending=False).head(3)
-        
-        if not leziaky.empty:
-            cols = st.columns(len(leziaky))
-            for i, (idx, row) in enumerate(leziaky.iterrows()):
-                with cols[i]:
-                    st.error(f"**{row['nazov']}**")
-                    st.caption(f"V sklade už {row['dni_v_sklade']} dní")
-        
-        # --- HISTÓRIA V GRAFE ---
-        st.subheader("📈 Aktivita varenia (posledné dni)")
+        st.subheader("📈 Aktivita varenia")
         log_df['datum'] = pd.to_datetime(log_df['datum'])
-        daily_count = log_df.groupby('datum').size()
-        st.line_chart(daily_count)
+        st.line_chart(log_df.groupby('datum').size())
 
 # === TAB 5: PROFIL ===
 with tabs[4]:
     st.header("👤 Nastavenia")
-    st.write(f"Prihlásený ako: **{current_user}**")
-    if st.button("Odhlásiť sa"):
-        st.session_state.username = None
+    st.write(f"Užívateľ: **{current_user}**")
+    if st.button("Vymazať session a odhlásiť"):
+        st.session_state.clear()
         st.rerun()
