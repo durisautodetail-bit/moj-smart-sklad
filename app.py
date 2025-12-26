@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v6_3.db" # Nová verzia pre istotu
+DB_FILE = "sklad_v6_4.db"
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -42,30 +42,19 @@ def clean_json_response(text):
     return text
 
 def generate_progress_chart(start_weight, current_weight, target_weight, goal_type):
-    # Fix chyby s farbou: '#gray' -> '#808080'
     fig, ax = plt.subplots(figsize=(6, 2.5))
-    
     weights = [start_weight, current_weight, target_weight]
     labels = ["Štart", "Teraz", "Cieľ"]
-    # Opravené farby: Sivá, Červená (Streamlit style), Zelená
-    colors = ['#808080', '#FF4B4B', '#4CAF50'] 
-    
+    colors = ['#808080', '#FF4B4B', '#4CAF50']
     ax.bar(labels, weights, color=colors, alpha=0.8)
-    
-    # Dynamický rozsah osi Y, aby stĺpce "lietali" a nezačínali od nuly (pre lepší detail)
-    min_w = min(weights)
-    max_w = max(weights)
+    min_w, max_w = min(weights), max(weights)
     ax.set_ylim(min_w - 5, max_w + 5)
-    
     ax.grid(axis='y', linestyle=':', alpha=0.3)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['left'].set_visible(False)
-    
-    # Hodnoty nad stĺpcami
     for i, v in enumerate(weights):
         ax.text(i, v + 0.5, f"{v} kg", ha='center', fontweight='bold', fontsize=9)
-        
     return fig
 
 # --- DATABÁZA ---
@@ -92,7 +81,6 @@ def save_full_profile(data):
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     start_w = data.get('weight', 80)
-    
     c.execute('''
         INSERT INTO users (username, gender, age, weight, height, activity, goal, target_weight, allergies, dislikes, coach_style, archetype, health_issues, ai_strategy, is_premium, last_updated, start_weight)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -118,6 +106,13 @@ def update_weight(username, new_weight):
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     c.execute("UPDATE users SET weight=?, last_updated=? WHERE username=?", (new_weight, today, username))
+    conn.commit()
+    conn.close()
+
+def toggle_premium(username, status):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_premium=? WHERE username=?", (1 if status else 0, username))
     conn.commit()
     conn.close()
 
@@ -155,15 +150,17 @@ def cook_recipe_from_stock(ingredients_used, recipe_name, total_kcal, owner):
     c.execute('''INSERT INTO daily_log (owner, nazov, zjedene_g, prijate_kcal, prijate_b, prijate_s, prijate_t, datum) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (owner, recipe_name, 0, total_kcal, 0, 0, 0, today))
     for ing in ingredients_used:
-        item_id = ing['id']
-        used_g = ing['used_g']
-        c.execute("SELECT vaha_g FROM inventory WHERE id=? AND owner=?", (item_id, owner))
-        row = c.fetchone()
-        if row:
-            current_w = row[0]
-            new_w = current_w - used_g
-            if new_w <= 0: c.execute("DELETE FROM inventory WHERE id=?", (item_id,))
-            else: c.execute("UPDATE inventory SET vaha_g=? WHERE id=?", (new_w, item_id))
+        # Check if ID exists (it might be null if ingredient is not in stock)
+        if ing.get('id'):
+            item_id = ing['id']
+            used_g = ing['amount_g']
+            c.execute("SELECT vaha_g FROM inventory WHERE id=? AND owner=?", (item_id, owner))
+            row = c.fetchone()
+            if row:
+                current_w = row[0]
+                new_w = current_w - used_g
+                if new_w <= 0: c.execute("DELETE FROM inventory WHERE id=?", (item_id,))
+                else: c.execute("UPDATE inventory SET vaha_g=? WHERE id=?", (new_w, item_id))
     conn.commit()
     conn.close()
 
@@ -204,20 +201,19 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v6.3", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v6.4", layout="wide", page_icon="🥗")
 init_db()
 
 # Session State
 if 'active_tab' not in st.session_state: st.session_state.active_tab = 0
 if 'show_bridge' not in st.session_state: st.session_state.show_bridge = False
 if 'generated_recipes' not in st.session_state: st.session_state.generated_recipes = None
-if 'weekly_plan' not in st.session_state: st.session_state.weekly_plan = None
+if 'view_recipe' not in st.session_state: st.session_state.view_recipe = None # Pre detail receptu
 
 # === 1. LOGIN ===
 if 'username' not in st.session_state: st.session_state.username = None
 if not st.session_state.username:
     st.title("🥗 Smart Food")
-    st.caption("Tvoj osobný sklad a tréner")
     name_input = st.text_input("Meno:", placeholder="Napr. Jakub")
     if st.button("Vstúpiť", type="primary"):
         if name_input:
@@ -227,19 +223,19 @@ if not st.session_state.username:
 
 current_user = st.session_state.username
 
-# === BRIDGE (PRECHOD) ===
+# === BRIDGE ===
 if st.session_state.show_bridge and 'temp_profile_data' in st.session_state:
     st.balloons()
     data = st.session_state.temp_profile_data
     st.title("🎉 Profil hotový!")
-    st.success("Tvoja cesta začína dnes.")
-    
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("Prejsť do aplikácie ➡️", type="primary", use_container_width=True):
-            st.session_state.active_tab = 0
-            st.session_state.show_bridge = False
-            st.rerun()
+    try:
+        fig = generate_progress_chart(data['weight'], data['weight'], data['target_weight'], data['goal'])
+        st.pyplot(fig)
+    except: pass
+    if st.button("Prejsť do aplikácie ➡️", type="primary"):
+        st.session_state.active_tab = 0
+        st.session_state.show_bridge = False
+        st.rerun()
     st.stop()
 
 db_profile = get_user_profile(current_user)
@@ -248,7 +244,6 @@ user_is_premium = bool(db_profile[14]) if db_profile and len(db_profile) > 14 el
 # === 2. ONBOARDING ===
 if not db_profile:
     st.title(f"👋 Ahoj {current_user}!")
-    st.info("Rýchle nastavenie profilu predtým, než začneme.")
     with st.form("quick_setup"):
         col1, col2 = st.columns(2)
         with col1:
@@ -260,7 +255,6 @@ if not db_profile:
             f_activity = st.selectbox("Aktivita", ["Sedavá", "Ľahká", "Stredná", "Vysoká"])
             f_goal = st.selectbox("Cieľ", ["Udržiavať", "Chudnúť", "Pribrať"])
             f_dislikes = st.text_input("Čo neľúbiš?", placeholder="napr. huby, ryby")
-        
         if st.form_submit_button("Uložiť a spustiť 🚀"):
             data = {
                 "username": current_user, "gender": f_gender, "age": f_age, "weight": f_weight, "height": f_height, 
@@ -274,49 +268,36 @@ if not db_profile:
             st.rerun()
     st.stop()
 
-# --- MAIN APP LOGIC ---
-
-# Načítanie dát
+# --- MAIN APP ---
 p_weight = db_profile[3]
-# Oprava: Načítanie start_weight (index 16), ak nie je, tak p_weight
 p_start_weight = db_profile[16] if len(db_profile) > 16 and db_profile[16] else p_weight
 p_target_w = db_profile[7]
 p_goal = db_profile[6]
 p_dislikes = db_profile[9]
 p_arch = db_profile[11]
 
-# Kalkulácia kalórií
 factor = {"Sedavá": 1.2, "Ľahká": 1.375, "Stredná": 1.55, "Vysoká": 1.725, "Extrémna": 1.9}
 tdee = (10 * p_weight + 6.25 * db_profile[4] - 5 * db_profile[2] + (5 if db_profile[1] == "Muž" else -161)) * factor.get(db_profile[5], 1.375)
 target_kcal = tdee - 500 if p_goal == "Chudnúť" else (tdee + 300 if p_goal == "Pribrať" else tdee)
 
-# MENU TABY
 tabs = st.tabs(["📊 Prehľad", "👨‍🍳 Kuchyňa", "📦 Sklad", "➕ Skenovať", "🤖 AI Tréner"])
 
-# === TAB 1: PREHĽAD (DASHBOARD) ===
+# === TAB 1: PREHĽAD ===
 with tabs[0]:
     st.subheader("👋 Vitaj späť!")
-    
-    # KARTY (Metrics)
     c1, c2, c3 = st.columns(3)
     df_log = get_today_log(current_user)
     curr_kcal = df_log['prijate_kcal'].sum() if not df_log.empty else 0
-    
     c1.metric("Aktuálna váha", f"{p_weight} kg", delta=f"{p_weight - p_start_weight:.1f} kg", delta_color="inverse")
     c2.metric("Cieľ", f"{p_target_w} kg")
     c3.metric("Dnes prijaté", f"{int(curr_kcal)} kcal", f"z {int(target_kcal)}")
-    
     st.markdown("---")
-    
-    # GRAF PROGRESU
     col_graph, col_input = st.columns([2, 1])
     with col_graph:
-        st.caption("📉 Tvoj progres")
         try:
             fig = generate_progress_chart(p_start_weight, p_weight, p_target_w, p_goal)
             st.pyplot(fig)
-        except Exception as e: st.error(f"Graf sa nepodarilo vykresliť: {e}")
-        
+        except Exception as e: st.error(f"Graf error: {e}")
     with col_input:
         with st.container(border=True):
             st.caption("⚖️ Aktualizácia váhy")
@@ -327,169 +308,207 @@ with tabs[0]:
                 time.sleep(0.5)
                 st.rerun()
 
-    if user_is_premium:
-        st.info(f"💡 **Tip dňa:** Tvoj archetyp je {p_arch}. Nezabudni na bielkoviny!")
-    else:
-        st.caption("🚀 Odomkni AI Coacha pre denné tipy a motiváciu.")
-
-# === TAB 2: KUCHYŇA (KITCHEN) ===
+# === TAB 2: KUCHYŇA (MASTERCHEF) ===
 with tabs[1]:
-    st.header("👨‍🍳 Tvoja Kuchyňa")
     
-    mode = st.radio("Čo ideme robiť?", ["🔥 Hladný TERAZ", "📅 Plánujem TÝŽDEŇ"], horizontal=True)
-    df_inv = get_inventory(current_user)
-    
-    if mode == "🔥 Hladný TERAZ":
-        if df_inv.empty:
-            st.warning("⚠️ Prázdny sklad. Najprv pridaj potraviny v záložke 'Sklad' alebo 'Skenovať'.")
-        else:
-            if st.button("✨ Vymysli 3 rýchlovky zo skladu", type="primary", use_container_width=True):
-                with st.spinner("Miešam ingrediencie..."):
-                    inv_json = df_inv[['id', 'nazov', 'vaha_g']].to_json(orient='records')
-                    prompt = f"""
-                    SKLAD: {inv_json}. NEĽÚBI: {p_dislikes}.
-                    Navrhni 3 jednoduché recepty TERAZ.
-                    JSON FORMAT: [{{ "name": "...", "desc": "...", "kcal": 0, "ingredients_used": [{{"id": 1, "used_g": 100}}] }}]
-                    """
-                    try:
-                        res = model.generate_content(prompt)
-                        st.session_state.generated_recipes = json.loads(clean_json_response(res.text))
-                    except: st.error("AI momentálne oddychuje. Skús znova.")
+    # AK SI PREZERÁME KONKRÉTNY RECEPT
+    if st.session_state.view_recipe:
+        recipe = st.session_state.view_recipe
+        st.button("⬅️ Späť na výber", on_click=lambda: st.session_state.update(view_recipe=None))
+        
+        st.header(recipe['title'])
+        st.caption(f"⏱️ {recipe.get('time', '20m')} | ⚡ {recipe.get('difficulty', 'Medium')}")
+        
+        # Makrá
+        m = recipe.get('macros', {'b':0, 's':0, 't':0})
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Kalórie", f"{recipe.get('kcal', 0)}")
+        k2.metric("Bielkoviny", f"{m.get('b')}g")
+        k3.metric("Sacharidy", f"{m.get('s')}g")
+        k4.metric("Tuky", f"{m.get('t')}g")
+        
+        st.divider()
+        
+        c_ing, c_steps = st.columns([1, 2])
+        
+        # SUROVINY (SEMAFOR)
+        with c_ing:
+            st.subheader("🛒 Suroviny")
+            df_inv = get_inventory(current_user)
             
-            if st.session_state.generated_recipes:
-                cols = st.columns(3)
-                for i, r in enumerate(st.session_state.generated_recipes):
-                    with cols[i]:
-                        with st.container(border=True):
-                            st.subheader(r['name'])
-                            st.caption(r['desc'])
-                            st.write(f"🔥 {r['kcal']} kcal")
-                            if st.button("Uvariť & Zjesť", key=f"now_{i}", type="secondary", use_container_width=True):
-                                cook_recipe_from_stock(r['ingredients_used'], r['name'], r['kcal'], current_user)
-                                st.balloons()
-                                st.session_state.generated_recipes = None
-                                st.rerun()
+            for ing in recipe['ingredients']:
+                status_icon = "🔴"
+                status_color = "red"
+                stock_info = "(Chýba)"
+                
+                # Check logic
+                if ing.get('id'):
+                    row = df_inv[df_inv['id'] == ing['id']]
+                    if not row.empty:
+                        stock_val = row.iloc[0]['vaha_g']
+                        needed = ing['amount_g']
+                        if stock_val >= needed:
+                            status_icon = "🟢"
+                            status_color = "green"
+                            stock_info = f"(Máš {int(stock_val)}g)"
+                        else:
+                            status_icon = "🟠"
+                            status_color = "orange"
+                            stock_info = f"(Máš len {int(stock_val)}g)"
+                
+                st.markdown(f":{status_color}[{status_icon} **{ing['name']}** - {ing['amount_g']}g] {stock_info}")
 
-    if mode == "📅 Plánujem TÝŽDEŇ":
-        with st.container(border=True):
-            st.subheader("🛠️ Nastavenie plánu")
-            days = st.slider("Na koľko dní?", 1, 7, 3)
-            meals = st.multiselect("Ktoré jedlá chceš?", ["Raňajky", "Obed", "Večera", "Snack"], default=["Obed", "Večera"])
-            
-            if st.button("📝 Vygenerovať Menu", type="primary", use_container_width=True):
-                if df_inv.empty:
-                    st.warning("Prázdny sklad.")
-                else:
-                    with st.spinner(f"Plánujem {days} dní..."):
-                        inv_str = df_inv['nazov'].to_string()
+        # POSTUP VARENIA
+        with c_steps:
+            st.subheader("👨‍🍳 Postup")
+            steps = recipe.get('steps', [])
+            for i, step in enumerate(steps):
+                st.checkbox(f"**Krok {i+1}:** {step}", key=f"step_{i}")
+
+        st.divider()
+        if st.button("🍽️ Uvarené! (Odpísať zo skladu)", type="primary", use_container_width=True):
+            cook_recipe_from_stock(recipe['ingredients'], recipe['title'], recipe['kcal'], current_user)
+            st.balloons()
+            st.toast("Dobrú chuť!", icon="😋")
+            st.session_state.view_recipe = None
+            st.rerun()
+
+    # HLAVNÉ MENU KUCHYNE (VÝBER)
+    else:
+        st.header("👨‍🍳 Šéfkuchár")
+        mode = st.radio("Režim:", ["🔥 Hladný TERAZ", "📅 Týždenný Plán"], horizontal=True)
+        df_inv = get_inventory(current_user)
+        
+        if mode == "🔥 Hladný TERAZ":
+            if df_inv.empty:
+                st.warning("Prázdny sklad.")
+            else:
+                if st.button("✨ Vymysli 3 recepty zo skladu", type="primary", use_container_width=True):
+                    with st.spinner("Analyzujem chute..."):
+                        inv_json = df_inv[['id', 'nazov', 'vaha_g']].to_json(orient='records')
                         prompt = f"""
-                        Vytvor jedálniček na {days} dní. Zahrň: {', '.join(meals)}.
-                        Sklad: {inv_str}. Neľúbi: {p_dislikes}.
-                        Výstup len textový formát (Markdown tabuľka).
+                        SKLAD: {inv_json}. NEĽÚBI: {p_dislikes}.
+                        Vytvor 3 detailné recepty.
+                        JSON FORMAT:
+                        [
+                          {{
+                            "title": "Názov", "time": "20 min", "difficulty": "Easy", "kcal": 500,
+                            "macros": {{"b": 30, "s": 50, "t": 10}},
+                            "ingredients": [
+                              {{"name": "Ryža", "amount_g": 100, "id": 1}}, (ID ak je v sklade, inak null)
+                              {{"name": "Voda", "amount_g": 200, "id": null}}
+                            ],
+                            "steps": ["Umy ryžu", "Var 15 minút"]
+                          }}
+                        ]
                         """
                         try:
                             res = model.generate_content(prompt)
-                            st.session_state.weekly_plan = res.text
-                        except: st.error("Chyba AI.")
-        
-        if st.session_state.weekly_plan:
-            st.markdown("### 🗓️ Tvoj Plán")
-            st.markdown(st.session_state.weekly_plan)
-            st.info("💡 Tip: Pre uvarenie konkrétneho jedla sa prepni na 'Hladný TERAZ' alebo si ho manuálne zapíš.")
+                            st.session_state.generated_recipes = json.loads(clean_json_response(res.text))
+                        except Exception as e: st.error(f"Chyba: {e}")
+
+                if st.session_state.generated_recipes:
+                    st.write("Vyber si:")
+                    cols = st.columns(3)
+                    for i, r in enumerate(st.session_state.generated_recipes):
+                        with cols[i]:
+                            with st.container(border=True):
+                                st.subheader(r['title'])
+                                st.write(f"⏱️ {r.get('time')} | 🔥 {r.get('kcal')} kcal")
+                                if st.button("👀 Pozrieť recept", key=f"view_{i}", use_container_width=True):
+                                    st.session_state.view_recipe = r
+                                    st.rerun()
+
+        if mode == "📅 Týždenný Plán":
+             with st.container(border=True):
+                days = st.slider("Počet dní", 1, 7, 3)
+                if st.button("Generovať Plán (Recepty)", type="primary"):
+                    if df_inv.empty: st.warning("Prázdny sklad")
+                    else:
+                        with st.spinner("Plánujem..."):
+                            inv_json = df_inv[['id', 'nazov', 'vaha_g']].to_json(orient='records')
+                            # Pre šetrenie tokenov generujeme zoznam receptov, ktorý sa tvári ako dni
+                            prompt = f"""
+                            Vytvor plán na {days} dní (Obed). Použi SKLAD: {inv_json}.
+                            Vráť JSON zoznam receptov (rovnaký formát ako vyššie), kde 'title' bude napr. 'Deň 1: Kuracie rizoto'.
+                            """
+                            try:
+                                res = model.generate_content(prompt)
+                                st.session_state.generated_recipes = json.loads(clean_json_response(res.text))
+                            except: st.error("Chyba AI")
+            
+             if st.session_state.generated_recipes:
+                st.write("Klikni na deň pre recept:")
+                for i, r in enumerate(st.session_state.generated_recipes):
+                     with st.container(border=True):
+                        c1, c2 = st.columns([4, 1])
+                        c1.write(f"**{r['title']}** ({r['kcal']} kcal)")
+                        if c2.button("Otvoriť", key=f"plan_{i}"):
+                            st.session_state.view_recipe = r
+                            st.rerun()
 
     st.divider()
-    with st.expander("📜 História zjedených jedál", expanded=False):
+    with st.expander("📜 História jedál"):
         hist = get_history_log(current_user)
-        if not hist.empty:
-            st.dataframe(hist, use_container_width=True, hide_index=True)
-        else:
-            st.write("Zatiaľ žiadna história.")
+        st.dataframe(hist, use_container_width=True, hide_index=True)
 
-# === TAB 3: SKLAD (INVENTORY) ===
+# === TAB 3: SKLAD ===
 with tabs[2]:
-    st.header("📦 Sklad potravín")
-    
-    with st.expander("➕ Pridať manuálne (bez skenovania)", expanded=False):
-        with st.form("manual_add"):
+    st.header("📦 Sklad")
+    with st.expander("➕ Pridať manuálne"):
+        with st.form("manual"):
             c1, c2, c3 = st.columns([2, 1, 1])
-            m_nazov = c1.text_input("Názov", placeholder="napr. Ryža")
-            m_vaha = c2.number_input("Gramy/Kusy", 1, 5000, 100)
-            m_kat = c3.selectbox("Kategória", ["Mliečne", "Mäso", "Pečivo", "Zelenina", "Iné"])
-            if st.form_submit_button("Pridať do skladu"):
-                add_item_manual(current_user, m_nazov, m_vaha, m_kat)
-                st.toast(f"{m_nazov} pridané!", icon="📦")
+            m_n = c1.text_input("Názov")
+            m_v = c2.number_input("Gramy", 1, 5000, 100)
+            m_k = c3.selectbox("Kat", ["Mäso", "Zelenina", "Príloha", "Mliečne", "Iné"])
+            if st.form_submit_button("Uložiť"):
+                add_item_manual(current_user, m_n, m_v, m_k)
+                st.toast("Pridané")
                 st.rerun()
-
+    
     df_inv = get_inventory(current_user)
     if not df_inv.empty:
-        st.write(f"Máš **{len(df_inv)}** položiek v sklade.")
-        df_inv['Vyhodiť'] = False
-        edited = st.data_editor(
-            df_inv[['Vyhodiť', 'id', 'nazov', 'vaha_g', 'kategoria']], 
-            column_config={
-                "Vyhodiť": st.column_config.CheckboxColumn("🗑️", help="Označ na vyhodenie", default=False),
-                "id": None
-            },
-            use_container_width=True,
-            hide_index=True,
-            key="inv_editor"
-        )
-        to_delete = edited[edited['Vyhodiť'] == True]
-        if not to_delete.empty:
-            if st.button(f"🗑️ Vyhodiť označené ({len(to_delete)})", type="secondary", use_container_width=True):
-                for i, r in to_delete.iterrows():
-                    delete_item(r['id'])
-                st.toast("Položky odstránené.", icon="🗑️")
-                st.rerun()
-    else:
-        st.info("Sklad je prázdny. Naskenuj bloček alebo pridaj manuálne.")
+        df_inv['Del'] = False
+        edited = st.data_editor(df_inv[['Del', 'id', 'nazov', 'vaha_g']], column_config={"Del": st.column_config.CheckboxColumn("🗑️"), "id": None}, use_container_width=True, hide_index=True, key="inv_ed")
+        to_del = edited[edited['Del']==True]
+        if not to_del.empty and st.button("Zmazať označené"):
+            for i, r in to_del.iterrows(): delete_item(r['id'])
+            st.rerun()
+    else: st.info("Prázdno")
 
 # === TAB 4: SKENOVANIE ===
 with tabs[3]:
-    st.header("📸 Skenovať bloček")
-    st.caption("Nahraj fotku bločku a AI automaticky vytiahne potraviny.")
-    
-    uples = st.file_uploader("Nahrať súbor", type=["jpg", "png", "pdf"], accept_multiple_files=True)
-    if uples and st.button("Analyzovať bloček", type="primary"):
-        all_items = []
+    st.header("📸 Sken")
+    up = st.file_uploader("Bloček", accept_multiple_files=True)
+    if up and st.button("Analyzovať"):
+        res_items = []
         bar = st.progress(0)
-        for i, f in enumerate(uples):
+        for i, f in enumerate(up):
             try:
                 img = process_file(f)
-                res = model.generate_content(["JSON zoznam: nazov, kategoria, vaha_g, kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g.", img])
-                all_items.extend(json.loads(clean_json_response(res.text)))
+                r = model.generate_content(["JSON: nazov, kategoria, vaha_g, kcal_100g, bielkoviny_100g, sacharidy_100g, tuky_100g.", img])
+                res_items.extend(json.loads(clean_json_response(r.text)))
             except: pass
-            bar.progress((i+1)/len(uples))
-        st.session_state.scan_result = all_items
-        
+            bar.progress((i+1)/len(up))
+        st.session_state.scan_result = res_items
     if 'scan_result' in st.session_state:
-        st.write("Skontroluj výsledok:")
-        edited = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic")
-        if st.button("📥 Naskladniť všetko", type="primary", use_container_width=True):
-            add_to_inventory(edited.to_dict('records'), current_user)
+        ed = st.data_editor(pd.DataFrame(st.session_state.scan_result), num_rows="dynamic")
+        if st.button("Naskladniť"):
+            add_to_inventory(ed.to_dict('records'), current_user)
             del st.session_state.scan_result
-            st.toast("Naskladnené!", icon="✅")
             st.rerun()
 
-# === TAB 5: AI TRÉNER (NA KONCI) ===
+# === TAB 5: TRÉNER ===
 with tabs[4]:
-    st.header("🤖 AI Tréner Max")
+    st.header("🤖 Max")
     if user_is_premium:
-        if "day_chat_history" not in st.session_state: st.session_state.day_chat_history = []
-        for msg in st.session_state.day_chat_history:
-            with st.chat_message(msg["role"]): st.write(msg["content"])
-        
-        with st.form("chat_ai", clear_on_submit=True):
-            user_msg = st.text_area("Napíš správu...", height=80)
-            if st.form_submit_button("Odoslať"):
-                st.session_state.day_chat_history.append({"role": "user", "content": user_msg})
-                with st.chat_message("user"): st.write(user_msg)
-                with st.spinner("Max premýšľa..."):
-                    try:
-                        res = coach_model.generate_content(f"User: {user_msg}")
-                        st.session_state.day_chat_history.append({"role": "ai", "content": res.text})
-                        with st.chat_message("ai"): st.write(res.text)
-                    except: st.error("Chyba spojenia.")
-    else:
-        st.warning("🔒 AI Tréner je dostupný v Premium verzii.")
-        st.info("V Basic verzii ti AI pomáha len s receptami v kuchyni.")
+        if "chat" not in st.session_state: st.session_state.chat = []
+        for m in st.session_state.chat:
+            with st.chat_message(m["role"]): st.write(m["content"])
+        if p := st.chat_input("..."):
+            st.session_state.chat.append({"role":"user", "content":p})
+            with st.chat_message("user"): st.write(p)
+            r = coach_model.generate_content(f"User: {p}").text
+            st.session_state.chat.append({"role":"ai", "content":r})
+            with st.chat_message("ai"): st.write(r)
+    else: st.warning("Premium funkcia.")
