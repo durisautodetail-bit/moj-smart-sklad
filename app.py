@@ -11,7 +11,7 @@ import time
 import matplotlib.pyplot as plt
 
 # --- 1. KONFIGURÁCIA ---
-DB_FILE = "sklad_v7_4.db" # Ostávame pri rovnakej DB štruktúre ako v7.4
+DB_FILE = "sklad_v7_5.db" 
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -37,7 +37,36 @@ CAT_ICONS = {
     "Iné": "🥫"
 }
 
-# --- 2. DB A LOGIKA ---
+# --- 2. POMOCNÉ FUNKCIE ---
+def optimize_image(image, max_width=800):
+    width, height = image.size
+    if width > max_width:
+        ratio = max_width / width
+        new_height = int(height * ratio)
+        return image.resize((max_width, new_height))
+    return image
+
+def clean_json_response(text):
+    text = text.replace("```json", "").replace("```", "").strip()
+    start_idx = text.find('[')
+    end_idx = text.rfind(']')
+    if start_idx != -1 and end_idx != -1:
+        return text[start_idx:end_idx+1]
+    start_obj = text.find('{')
+    end_obj = text.rfind('}')
+    if start_obj != -1 and end_obj != -1:
+        return text[start_obj:end_obj+1]
+    return text
+
+def process_file(uploaded_file):
+    if uploaded_file.type == "application/pdf":
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        pix = doc.load_page(0).get_pixmap()
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+    else: img = Image.open(uploaded_file)
+    return optimize_image(img)
+
+# --- 3. DATABÁZOVÉ OPERÁCIE ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -104,7 +133,6 @@ def update_inventory_weight(updates, owner):
     conn.commit()
     conn.close()
 
-# Rýchla akcia: Odpočítať váhu
 def quick_consume(item_id, amount_g, owner):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -164,30 +192,7 @@ def cook_recipe_from_stock(ingredients_used, recipe_name, total_kcal, owner):
     conn.commit()
     conn.close()
 
-def process_file(uploaded_file):
-    if uploaded_file.type == "application/pdf":
-        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-        pix = doc.load_page(0).get_pixmap()
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-    else: img = Image.open(uploaded_file)
-    return img
-
-def clean_json_response(text):
-    text = text.replace("```json", "").replace("```", "").strip()
-    start_idx = text.find('[')
-    end_idx = text.rfind(']')
-    if start_idx != -1 and end_idx != -1:
-        return text[start_idx:end_idx+1]
-    return text
-
-def optimize_image(image, max_width=800):
-    width, height = image.size
-    if width > max_width:
-        ratio = max_width / width
-        new_height = int(height * ratio)
-        return image.resize((max_width, new_height))
-    return image
-# --- UI START ---
+# --- 4. UI APLIKÁCIE ---
 st.set_page_config(page_title="Smart Food v7.5", layout="wide", page_icon="🥗")
 init_db()
 
@@ -280,6 +285,7 @@ with tabs[0]:
         
         if selection["rows"]:
             idx = selection["rows"][0]
+            # Pozor: selection vracia index v rámci filtrovaného view
             row = df_view.iloc[idx]
             
             with st.container(border=True):
