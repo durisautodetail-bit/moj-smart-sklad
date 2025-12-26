@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # --- KONFIGURÁCIA ---
-DB_FILE = "sklad_v5_5.db" # Nová verzia pre istotu
+DB_FILE = "sklad_v5_6.db" # Pre istotu nová DB, aby sa vyčistili chyby
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -169,16 +169,15 @@ def process_file(uploaded_file):
     return optimize_image(img)
 
 # --- UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v5.5", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v5.6", layout="wide", page_icon="🥗")
 init_db()
 
 if 'active_tab' not in st.session_state: st.session_state.active_tab = 0
 if 'show_bridge' not in st.session_state: st.session_state.show_bridge = False
 
-# === 1. LOGIN & AUTENTIFIKÁCIA ===
+# === 1. LOGIN ===
 if 'username' not in st.session_state: st.session_state.username = None
 
-# Ak nie je prihlásený, ukáž login a zastav všetko ostatné
 if not st.session_state.username:
     st.title("🔐 Prihlásenie")
     name_input = st.text_input("Tvoje meno:", placeholder="Napr. Jakub")
@@ -188,18 +187,18 @@ if not st.session_state.username:
             st.rerun()
     st.stop()
 
-# TOTO JE KĽÚČOVÉ: Definícia current_user HNEĎ po prihlásení
 current_user = st.session_state.username
 
 # === BRIDGE (PRECHOD) ===
-# Toto musí byť pred načítaním profilu, aby sme zvládli prechodové stavy
 if st.session_state.show_bridge and 'temp_profile_data' in st.session_state:
     st.balloons()
     data = st.session_state.temp_profile_data
     st.title("🎉 Profil pripravený!")
     st.info(f"🧬 Tvoj Archetyp: **{data.get('archetype', 'Neznámy')}**")
-    st.write("📉 **Tvoja cesta k úspechu:**")
+    
+    # Bezpečné generovanie grafu
     try:
+        st.write("📉 **Tvoja cesta k úspechu:**")
         fig = generate_progress_chart(data['weight'], data['target_weight'], data['goal'])
         st.pyplot(fig)
     except: pass
@@ -216,9 +215,8 @@ if st.session_state.show_bridge and 'temp_profile_data' in st.session_state:
             st.session_state.active_tab = 0
             st.session_state.show_bridge = False
             st.rerun()
-    st.stop()
+    st.stop() # Tu sa kód zastaví, ak sme na prechodovej obrazovke
 
-# Načítanie profilu z DB
 db_profile = get_user_profile(current_user)
 
 # === 2. ONBOARDING (AK NIE JE PROFIL V DB) ===
@@ -265,6 +263,7 @@ if not db_profile:
                 st.session_state.temp_profile_data = data
                 st.session_state.show_bridge = True
                 st.rerun()
+        st.stop() # <--- TOTO OPRAVILO CHYBU (Nedovolí kódu padnúť nižšie, kým nie je profil hotový)
 
     # CHAT
     if st.session_state.onboarding_choice == "chat":
@@ -275,7 +274,6 @@ if not db_profile:
         for msg in st.session_state.onboarding_history:
             with st.chat_message("ai" if msg["role"] == "model" else "user"): st.write(msg["parts"][0])
         
-        # Text Area pre lepšie písanie (odstavce cez Enter)
         with st.form(key="onboarding_form", clear_on_submit=True):
             user_input = st.text_area("Tvoja odpoveď:", height=100, placeholder="Píš koľko chceš...")
             submit_chat = st.form_submit_button("Odoslať správu ✉️")
@@ -314,11 +312,11 @@ if not db_profile:
                             st.session_state.show_bridge = True
                     st.rerun()
                 except Exception as e: st.error(e)
-        st.stop()
+        st.stop() # <--- TOTO TIEŽ ISTÍ SITUÁCIU
 
 # === 3. HLAVNÁ APLIKÁCIA ===
+# Sem sa kód dostane LEN ak db_profile existuje (nie je None)
 
-# Bezpečná kontrola dátumu pre Re-Check
 try:
     if db_profile and len(db_profile) > 14 and db_profile[14]:
         last_up = datetime.strptime(db_profile[14], "%Y-%m-%d")
@@ -330,7 +328,6 @@ try:
                     st.rerun()
 except: pass
 
-# Načítanie premenných (bezpečne, lebo vieme že db_profile existuje)
 p_weight, p_height, p_age, p_gender = db_profile[3], db_profile[4], db_profile[2], db_profile[1]
 p_act, p_goal, p_strat, p_arch, target_w = db_profile[5], db_profile[6], db_profile[13], db_profile[11], db_profile[7]
 
@@ -352,7 +349,6 @@ if 'active_tab' in st.session_state and st.session_state.active_tab == 2:
     st.toast("Prejdi na záložku 'Skenovať'!")
     st.session_state.active_tab = 0 
 
-# TAB 1: PREHĽAD
 with tabs[0]:
     if p_strat:
         with st.expander(f"📋 Stratégia ({p_arch})"): st.write(p_strat)
@@ -374,7 +370,6 @@ with tabs[0]:
             st.rerun()
     else: st.info("Sklad je prázdny.")
 
-# TAB 2: AI ASISTENT (Text Area verzia)
 with tabs[1]:
     st.header("💬 Max - Tvoj Asistent")
     if "day_chat_history" not in st.session_state: st.session_state.day_chat_history = []
@@ -398,7 +393,6 @@ with tabs[1]:
                 with st.chat_message("ai"): st.write(res.text)
             except Exception as e: st.error(e)
 
-# TAB 3: SKENOVANIE
 with tabs[2]:
     st.header("📸 Skenovanie")
     uples = st.file_uploader("Bločky", type=["jpg", "png", "pdf"], accept_multiple_files=True)
@@ -420,7 +414,6 @@ with tabs[2]:
             del st.session_state.scan_result
             st.rerun()
 
-# TAB 4: SKLAD
 with tabs[3]:
     df_inv = get_inventory(current_user)
     if not df_inv.empty:
@@ -432,7 +425,6 @@ with tabs[3]:
             st.rerun()
     else: st.info("Sklad je prázdny.")
 
-# TAB 5: PROFIL
 with tabs[4]:
     st.header("Tvoj Profil")
     st.info(f"Archetyp: **{p_arch}**")
