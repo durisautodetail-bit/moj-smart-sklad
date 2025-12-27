@@ -27,7 +27,6 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-# Mapovanie kategórií na Emojis
 CAT_ICONS = {
     "Mäso": "🥩", 
     "Mliečne": "🥛", 
@@ -66,7 +65,7 @@ def process_file(uploaded_file):
     else: img = Image.open(uploaded_file)
     return optimize_image(img)
 
-# --- 3. DATABÁZOVÉ OPERÁCIE ---
+# --- 3. DATABÁZA A LOGIKA ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -168,14 +167,14 @@ def get_full_log(owner):
 
 def seed_test_data(owner):
     nakup = [
-        {'nazov': 'Kuracie prsia', 'kategoria': 'Mäso', 'vaha_g': 1500, 'kcal_100g': 165, 'bielkoviny_100g': 31, 'sacharidy_100g': 0, 'tuky_100g': 3.6},
-        {'nazov': 'Hovädzie zadné', 'kategoria': 'Mäso', 'vaha_g': 1000, 'kcal_100g': 250, 'bielkoviny_100g': 26, 'sacharidy_100g': 0, 'tuky_100g': 15},
-        {'nazov': 'Vajcia L (30ks)', 'kategoria': 'Mliečne', 'vaha_g': 1800, 'kcal_100g': 155, 'bielkoviny_100g': 13, 'sacharidy_100g': 1.1, 'tuky_100g': 11},
-        {'nazov': 'Mlieko polotučné', 'kategoria': 'Mliečne', 'vaha_g': 6000, 'kcal_100g': 46, 'bielkoviny_100g': 3.3, 'sacharidy_100g': 4.8, 'tuky_100g': 1.5},
-        {'nazov': 'Maslo 82%', 'kategoria': 'Mliečne', 'vaha_g': 500, 'kcal_100g': 717, 'bielkoviny_100g': 0.8, 'sacharidy_100g': 0.6, 'tuky_100g': 81},
-        {'nazov': 'Zemiaky', 'kategoria': 'Zelenina', 'vaha_g': 5000, 'kcal_100g': 77, 'bielkoviny_100g': 2, 'sacharidy_100g': 17, 'tuky_100g': 0.1},
-        {'nazov': 'Ryža Basmati', 'kategoria': 'Trvanlivé', 'vaha_g': 2000, 'kcal_100g': 365, 'bielkoviny_100g': 7, 'sacharidy_100g': 77, 'tuky_100g': 0.6},
-        {'nazov': 'Olivový olej', 'kategoria': 'Trvanlivé', 'vaha_g': 1000, 'kcal_100g': 884, 'bielkoviny_100g': 0, 'sacharidy_100g': 0, 'tuky_100g': 100}
+        {'nazov': 'Kuracie prsia', 'kategoria': 'Mäso', 'vaha_g': 1500, 'kcal_100g': 165},
+        {'nazov': 'Hovädzie zadné', 'kategoria': 'Mäso', 'vaha_g': 1000, 'kcal_100g': 250},
+        {'nazov': 'Vajcia L (30ks)', 'kategoria': 'Mliečne', 'vaha_g': 1800, 'kcal_100g': 155},
+        {'nazov': 'Mlieko polotučné', 'kategoria': 'Mliečne', 'vaha_g': 6000, 'kcal_100g': 46},
+        {'nazov': 'Maslo 82%', 'kategoria': 'Mliečne', 'vaha_g': 500, 'kcal_100g': 717},
+        {'nazov': 'Zemiaky', 'kategoria': 'Zelenina', 'vaha_g': 5000, 'kcal_100g': 77},
+        {'nazov': 'Ryža Basmati', 'kategoria': 'Trvanlivé', 'vaha_g': 2000, 'kcal_100g': 365},
+        {'nazov': 'Olivový olej', 'kategoria': 'Trvanlivé', 'vaha_g': 1000, 'kcal_100g': 884}
     ]
     add_to_inventory(nakup, owner)
 
@@ -193,7 +192,7 @@ def cook_recipe_from_stock(ingredients_used, recipe_name, total_kcal, owner):
     conn.close()
 
 # --- 4. UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v7.5", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v7.5.1", layout="wide", page_icon="🥗")
 init_db()
 
 if 'username' not in st.session_state: st.session_state.username = None
@@ -204,7 +203,7 @@ if not st.session_state.username:
     with col1: st.image("https://cdn-icons-png.flaticon.com/512/2927/2927347.png", width=120)
     with col2: 
         st.title("Smart Food")
-        st.caption("Verzia 7.5 - Visual Edition")
+        st.caption("Verzia 7.5.1 - Fixnutý Sklad")
         name = st.text_input("Meno užívateľa:")
         if st.button("🚀 Vstúpiť") and name:
             st.session_state.username = name
@@ -215,7 +214,7 @@ if not st.session_state.username:
 current_user = st.session_state.username
 tabs = st.tabs(["📦 Sklad", "➕ Skenovať", "👨‍🍳 Kuchyňa", "📊 Prehľad", "👤 Profil"])
 
-# === TAB 1: SKLAD 3.0 (VISUAL & SPEED) ===
+# === TAB 1: SKLAD (OPRAVENÝ) ===
 with tabs[0]:
     df_inv = get_inventory(current_user)
 
@@ -228,7 +227,7 @@ with tabs[0]:
                 if st.form_submit_button("Uložiť"):
                     add_item_manual(current_user, n, v, "Iné"); st.rerun()
     else:
-        # 1. TOP SHELF (METRIKY)
+        # Metriky
         total_items = len(df_inv)
         total_weight = df_inv['vaha_g'].sum() / 1000
         low_stock = len(df_inv[df_inv['vaha_g'] < 200])
@@ -236,85 +235,86 @@ with tabs[0]:
         m1, m2, m3 = st.columns(3)
         m1.metric("Počet položiek", total_items)
         m2.metric("Váha zásob", f"{total_weight:.1f} kg")
-        m3.metric("Dochádza ( < 200g)", f"{low_stock} ks", delta_color="inverse")
+        m3.metric("Dochádza", f"{low_stock} ks", delta_color="inverse")
 
         st.divider()
 
-        # 2. FILTRE
+        # Filtre
         c_search, c_filter = st.columns([2, 2])
         search_query = c_search.text_input("🔍 Rýchle hľadanie", placeholder="Vajcia, Mlieko...")
         cats = df_inv['kategoria'].unique().tolist()
         sel_cats = c_filter.multiselect("Filter", cats, default=cats)
         
-        # Filtrovanie
-        df_view = df_inv[df_inv['kategoria'].isin(sel_cats)]
+        # Aplikácia filtrov
+        df_view = df_inv[df_inv['kategoria'].isin(sel_cats)].copy() # .copy() pre bezpečnosť
         if search_query:
             df_view = df_view[df_view['nazov'].str.contains(search_query, case=False)]
 
-        # Príprava vizuálnych dát (Ikony)
+        # Príprava vizuálnych dát
         df_view['icon'] = df_view['kategoria'].map(lambda x: CAT_ICONS.get(x, "📦"))
-        
-        # 3. TABUĽKA S PROGRESS BARMI
+        # Pre istotu pretypujeme váhu na int, aby ProgressColumn nepadal
+        df_view['vaha_g'] = df_view['vaha_g'].fillna(0).astype(int)
+
         st.caption("Klikni na riadok pre rýchle akcie.")
         
+        # OPRAVENÝ DATA EDITOR (Bez konfliktných parametrov)
         edited_df = st.data_editor(
             df_view,
+            column_order=["icon", "nazov", "vaha_g"], # Explicitné poradie
             column_config={
-                "id": None, "owner": None, "kcal_100g": None, 
-                "bielkoviny_100g": None, "sacharidy_100g": None, "tuky_100g": None, "datum_pridania": None,
-                "kategoria": None, # Skryjeme text kategórie
-                "icon": st.column_config.TextColumn("Druh", width="small", disabled=True),
+                "icon": st.column_config.TextColumn("Druh", disabled=True), # Vyhodené width="small"
                 "nazov": st.column_config.TextColumn("Surovina", disabled=True),
                 "vaha_g": st.column_config.ProgressColumn(
                     "Stav zásob", 
                     help="Vizuálny stav", 
                     format="%d g",
                     min_value=0, 
-                    max_value=2000, # Vizuálny strop (2kg = plný bar)
+                    max_value=2000,
                 ),
             },
-            column_order=["icon", "nazov", "vaha_g"], # Poradie stĺpcov
             use_container_width=True,
             hide_index=True,
             selection_mode="single-row",
             key="inv_select"
         )
 
-        # 4. QUICK ACTION PANEL (INŠPEKTOR)
+        # Inšpektor a akcie
         selection = st.session_state.inv_select.get("selection", {"rows": []})
         
         if selection["rows"]:
             idx = selection["rows"][0]
-            # Pozor: selection vracia index v rámci filtrovaného view
-            row = df_view.iloc[idx]
-            
-            with st.container(border=True):
-                st.subheader(f"{CAT_ICONS.get(row['kategoria'], '📦')} {row['nazov']}")
+            # Bezpečné získanie riadku podľa indexu vo VIEW
+            try:
+                row = df_view.iloc[idx]
                 
-                # RÝCHLE AKCIE (SPEED)
-                col_eat1, col_eat2, col_trash = st.columns(3)
-                if col_eat1.button("🍽️ Zjesť 100g", use_container_width=True):
-                    quick_consume(row['id'], 100, current_user)
-                    st.toast(f"Odpísaných 100g z {row['nazov']}")
-                    time.sleep(0.5); st.rerun()
-                
-                if col_eat2.button("🥪 Zjesť 50g", use_container_width=True):
-                    quick_consume(row['id'], 50, current_user)
-                    st.toast(f"Odpísaných 50g z {row['nazov']}")
-                    time.sleep(0.5); st.rerun()
+                with st.container(border=True):
+                    st.subheader(f"{CAT_ICONS.get(row['kategoria'], '📦')} {row['nazov']}")
+                    
+                    c_eat1, c_eat2, c_trash = st.columns(3)
+                    if c_eat1.button("🍽️ Zjesť 100g", use_container_width=True):
+                        quick_consume(row['id'], 100, current_user)
+                        st.toast(f"-100g {row['nazov']}")
+                        time.sleep(0.5); st.rerun()
+                    
+                    if c_eat2.button("🥪 Zjesť 50g", use_container_width=True):
+                        quick_consume(row['id'], 50, current_user)
+                        st.toast(f"-50g {row['nazov']}")
+                        time.sleep(0.5); st.rerun()
 
-                if col_trash.button("🗑️ Minúť všetko", use_container_width=True, type="primary"):
-                    quick_consume(row['id'], row['vaha_g'], current_user)
-                    st.toast(f"{row['nazov']} spotrebované!")
-                    time.sleep(0.5); st.rerun()
-                
-                with st.expander("✏️ Detailná editácia"):
-                    with st.form("edit_full"):
-                        new_n = st.text_input("Názov", row['nazov'])
-                        new_v = st.number_input("Presná váha", 0, 10000, int(row['vaha_g']))
-                        if st.form_submit_button("Uložiť zmeny"):
-                            update_item_details(row['id'], new_n, row['kategoria'], new_v, row['kcal_100g'], 0,0,0, current_user)
-                            st.rerun()
+                    if c_trash.button("🗑️ Minúť všetko", use_container_width=True, type="primary"):
+                        quick_consume(row['id'], row['vaha_g'], current_user)
+                        st.toast(f"{row['nazov']} minuté!")
+                        time.sleep(0.5); st.rerun()
+                    
+                    with st.expander("✏️ Detailná editácia"):
+                        with st.form("edit_full"):
+                            new_n = st.text_input("Názov", row['nazov'])
+                            new_v = st.number_input("Presná váha", 0, 10000, int(row['vaha_g']))
+                            if st.form_submit_button("Uložiť zmeny"):
+                                update_item_details(row['id'], new_n, row['kategoria'], new_v, row['kcal_100g'], 0,0,0, current_user)
+                                st.rerun()
+            except IndexError:
+                st.info("Vyber riadok.")
 
     st.divider()
     with st.expander("➕ Manuálne pridanie"):
