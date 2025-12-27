@@ -192,7 +192,7 @@ def cook_recipe_from_stock(ingredients_used, recipe_name, total_kcal, owner):
     conn.close()
 
 # --- 4. UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v7.5.1", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v7.5.2", layout="wide", page_icon="🥗")
 init_db()
 
 if 'username' not in st.session_state: st.session_state.username = None
@@ -203,7 +203,7 @@ if not st.session_state.username:
     with col1: st.image("https://cdn-icons-png.flaticon.com/512/2927/2927347.png", width=120)
     with col2: 
         st.title("Smart Food")
-        st.caption("Verzia 7.5.1 - Fixnutý Sklad")
+        st.caption("Verzia 7.5.2 - Stability Fix")
         name = st.text_input("Meno užívateľa:")
         if st.button("🚀 Vstúpiť") and name:
             st.session_state.username = name
@@ -214,7 +214,7 @@ if not st.session_state.username:
 current_user = st.session_state.username
 tabs = st.tabs(["📦 Sklad", "➕ Skenovať", "👨‍🍳 Kuchyňa", "📊 Prehľad", "👤 Profil"])
 
-# === TAB 1: SKLAD (OPRAVENÝ) ===
+# === TAB 1: SKLAD (STABLE VERSION) ===
 with tabs[0]:
     df_inv = get_inventory(current_user)
 
@@ -246,30 +246,31 @@ with tabs[0]:
         sel_cats = c_filter.multiselect("Filter", cats, default=cats)
         
         # Aplikácia filtrov
-        df_view = df_inv[df_inv['kategoria'].isin(sel_cats)].copy() # .copy() pre bezpečnosť
+        df_view = df_inv[df_inv['kategoria'].isin(sel_cats)].copy() 
         if search_query:
             df_view = df_view[df_view['nazov'].str.contains(search_query, case=False)]
 
         # Príprava vizuálnych dát
         df_view['icon'] = df_view['kategoria'].map(lambda x: CAT_ICONS.get(x, "📦"))
-        # Pre istotu pretypujeme váhu na int, aby ProgressColumn nepadal
-        df_view['vaha_g'] = df_view['vaha_g'].fillna(0).astype(int)
+        
+        # Konverzia na čísla (Float), aby sme sa vyhli TypeError
+        df_view['vaha_g'] = pd.to_numeric(df_view['vaha_g'], errors='coerce').fillna(0)
 
         st.caption("Klikni na riadok pre rýchle akcie.")
         
-        # OPRAVENÝ DATA EDITOR (Bez konfliktných parametrov)
+        # ZJEDNODUŠENÝ DATA EDITOR (Bez Progress Barov, ktoré padajú)
         edited_df = st.data_editor(
             df_view,
-            column_order=["icon", "nazov", "vaha_g"], # Explicitné poradie
+            column_order=["icon", "nazov", "vaha_g"], 
             column_config={
-                "icon": st.column_config.TextColumn("Druh", disabled=True), # Vyhodené width="small"
+                "icon": st.column_config.TextColumn("Druh", disabled=True), 
                 "nazov": st.column_config.TextColumn("Surovina", disabled=True),
-                "vaha_g": st.column_config.ProgressColumn(
-                    "Stav zásob", 
-                    help="Vizuálny stav", 
-                    format="%d g",
+                # Používame NumberColumn namiesto ProgressColumn pre maximálnu stabilitu
+                "vaha_g": st.column_config.NumberColumn(
+                    "Množstvo (g)", 
                     min_value=0, 
-                    max_value=2000,
+                    max_value=10000,
+                    format="%d g"
                 ),
             },
             use_container_width=True,
@@ -283,7 +284,6 @@ with tabs[0]:
         
         if selection["rows"]:
             idx = selection["rows"][0]
-            # Bezpečné získanie riadku podľa indexu vo VIEW
             try:
                 row = df_view.iloc[idx]
                 
@@ -315,6 +315,8 @@ with tabs[0]:
                                 st.rerun()
             except IndexError:
                 st.info("Vyber riadok.")
+            except Exception as e:
+                st.error(f"Chyba pri výbere: {e}")
 
     st.divider()
     with st.expander("➕ Manuálne pridanie"):
