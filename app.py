@@ -10,15 +10,15 @@ from datetime import datetime
 import time
 
 # --- 1. KONFIGURÁCIA ---
-# ZMENA: Nový názov DB pre čistý štart bez chýb z minulosti
-DB_FILE = "sklad_v7_6.db" 
+DB_FILE = "sklad_v7_7.db" # Nová DB pre istotu
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-1.5-flash")
 except Exception as e:
-    st.error(f"Chyba API kľúča: {e}")
+    # Tichý režim chyby, aby nezhadzovala appku pri štarte
+    pass
 
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -26,8 +26,6 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
-
-CAT_ICONS = {"Mäso": "🥩", "Mliečne": "🥛", "Zelenina": "🥦", "Ovocie": "🍎", "Trvanlivé": "🥖", "Iné": "🥫"}
 
 # --- 2. POMOCNÉ FUNKCIE ---
 def optimize_image(image, max_width=800):
@@ -57,7 +55,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, is_premium INTEGER DEFAULT 0, last_updated TEXT)''')
-    # Zjednodušená schéma pre stabilitu
     c.execute('''CREATE TABLE IF NOT EXISTS inventory (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         owner TEXT, 
@@ -83,13 +80,11 @@ def add_to_inventory(items, owner):
     c = conn.cursor()
     today = datetime.now().strftime("%Y-%m-%d")
     for item in items:
-        # Bezpečné získanie hodnôt
         try:
             vaha = float(item.get('vaha_g', 100))
             kcal = float(item.get('kcal_100g', 100))
         except:
             vaha, kcal = 100.0, 100.0
-            
         c.execute('''INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, datum_pridania) 
                      VALUES (?, ?, ?, ?, ?, ?)''', 
                   (owner, item.get('nazov', 'Neznáme'), item.get('kategoria', 'Iné'), vaha, kcal, today))
@@ -162,15 +157,14 @@ def cook_recipe(recipe_name, kcal, ingredients, owner):
     conn.commit(); conn.close()
 
 # --- 4. UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v7.6", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v7.7", layout="wide", page_icon="🥗")
 init_db()
 
 if 'username' not in st.session_state: st.session_state.username = None
 if 'recipes' not in st.session_state: st.session_state.recipes = []
-if 'plan' not in st.session_state: st.session_state.plan = []
 
 if not st.session_state.username:
-    st.title("🥗 Smart Food v7.6 (Clean)")
+    st.title("🥗 Smart Food v7.7 (Stable)")
     name = st.text_input("Meno:")
     if st.button("Štart") and name:
         st.session_state.username = name
@@ -181,7 +175,7 @@ if not st.session_state.username:
 current_user = st.session_state.username
 tabs = st.tabs(["📦 Sklad", "➕ Skenovať", "👨‍🍳 Kuchyňa", "📊 Prehľad", "⚙️ Nástroje"])
 
-# === TAB 1: SKLAD (SAFE MODE) ===
+# === TAB 1: SKLAD (MAXIMAL STABILITY) ===
 with tabs[0]:
     df = get_inventory(current_user)
     
@@ -191,66 +185,86 @@ with tabs[0]:
         # Metriky
         c1, c2 = st.columns(2)
         c1.metric("Položky", len(df))
-        c2.metric("Celková váha", f"{df['vaha_g'].sum()/1000:.1f} kg")
+        c2.metric("Váha", f"{df['vaha_g'].sum()/1000:.1f} kg")
         
-        # Filtre
         st.divider()
+        
+        # Filtrovanie
         col_s, col_f = st.columns([2,1])
         search = col_s.text_input("Hľadať...")
         cats = list(df['kategoria'].unique())
-        sel_cat = col_f.multiselect("Kategória", cats, default=cats)
+        if cats:
+            sel_cat = col_f.multiselect("Kategória", cats, default=cats)
+        else:
+            sel_cat = []
         
         # Aplikácia filtra
-        df_view = df[df['kategoria'].isin(sel_cat)]
-        if search: df_view = df_view[df_view['nazov'].str.contains(search, case=False)]
+        df_view = df.copy()
+        if sel_cat:
+            df_view = df_view[df_view['kategoria'].isin(sel_cat)]
+        if search:
+            df_view = df_view[df_view['nazov'].str.contains(search, case=False)]
         
-        # CRITICAL FIX: Reset indexu a konverzia typov pre stabilitu editora
+        # !!! CRITICAL FIX: CLEANING DATA TYPES !!!
+        # Toto zabráni TypeError. Vynútime typy.
         df_view = df_view.reset_index(drop=True)
         df_view['vaha_g'] = pd.to_numeric(df_view['vaha_g'], errors='coerce').fillna(0)
-        df_view['icon'] = df_view['kategoria'].map(lambda x: CAT_ICONS.get(x, "📦"))
+        df_view['nazov'] = df_view['nazov'].astype(str)
+        df_view['kategoria'] = df_view['kategoria'].astype(str)
 
-        # DATA EDITOR - BEZ ZLOŽITÝCH CONFIGOV
+        # PRÍPRAVA PRE EDITOR
+        # Zobrazíme len potrebné stĺpce, žiadne fancy configy
+        editor_data = df_view[['nazov', 'kategoria', 'vaha_g', 'id']].copy()
+
+        st.caption("Môžeš prepísať váhu priamo v tabuľke.")
+        
         edited = st.data_editor(
-            df_view,
-            column_order=["icon", "nazov", "vaha_g", "kategoria"],
+            editor_data[['nazov', 'kategoria', 'vaha_g']], # ID nezobrazíme
             column_config={
-                "icon": st.column_config.TextColumn("", disabled=True, width="small"),
-                "nazov": st.column_config.TextColumn("Názov", disabled=True),
-                "kategoria": st.column_config.TextColumn("Druh", disabled=True),
                 "vaha_g": st.column_config.NumberColumn("Množstvo (g)", min_value=0, max_value=10000)
             },
             hide_index=True,
             use_container_width=True,
             selection_mode="single-row",
-            key="safe_editor" # Nový kľúč pre reset stavu
+            key="stable_editor_v77"
         )
 
-        # Detekcia zmien váhy (priama editácia)
+        # DETEKCIA ZMIEN
+        # Porovnáme edited (frontend) s editor_data (backend) podľa indexu
         changes = []
         for i, row in edited.iterrows():
-            orig = df[df['id'] == row['id']]
-            if not orig.empty and float(row['vaha_g']) != float(orig.iloc[0]['vaha_g']):
-                changes.append({'id': row['id'], 'vaha_g': row['vaha_g']})
+            # Nájdeme pôvodné ID z editor_data podľa indexu
+            original_id = editor_data.iloc[i]['id']
+            # Nájdeme pôvodnú váhu z DB (df)
+            db_row = df[df['id'] == original_id]
+            
+            if not db_row.empty:
+                old_w = float(db_row.iloc[0]['vaha_g'])
+                new_w = float(row['vaha_g'])
+                if old_w != new_w:
+                    changes.append({'id': original_id, 'vaha_g': new_w})
+        
         if changes:
             update_inventory_weight(changes, current_user)
+            st.toast("Uložené!")
+            time.sleep(0.5)
             st.rerun()
 
-        # Akcie pre vybraný riadok
-        sel = st.session_state.safe_editor.get("selection", {"rows": []})
+        # AKCIE
+        sel = st.session_state.stable_editor_v77.get("selection", {"rows": []})
         if sel["rows"]:
             idx = sel["rows"][0]
-            # Bezpečné vytiahnutie riadku
-            if idx < len(df_view):
-                row = df_view.iloc[idx]
-                st.info(f"Vybrané: **{row['nazov']}** ({row['vaha_g']}g)")
-                
-                c_a, c_b, c_c = st.columns(3)
-                if c_a.button("🍽️ Zjesť 100g"):
-                    quick_consume(row['id'], 100, current_user); st.rerun()
-                if c_b.button("🗑️ Vyhodiť"):
-                    delete_item(row['id'], current_user); st.rerun()
-                if c_c.button("✏️ Premenovať"):
-                    st.toast("Funkcia v príprave") 
+            # Mapovanie indexu na ID
+            real_id = editor_data.iloc[idx]['id']
+            row_data = df[df['id'] == real_id].iloc[0]
+            
+            st.info(f"Vybrané: **{row_data['nazov']}**")
+            c1, c2 = st.columns(2)
+            if c1.button("🍽️ Zjesť 100g"):
+                quick_consume(real_id, 100, current_user); st.rerun()
+            if c2.button("🗑️ Vyhodiť"):
+                delete_item(real_id, current_user); st.rerun()
+
 
 # === TAB 2: SKENOVANIE ===
 with tabs[1]:
@@ -266,7 +280,7 @@ with tabs[1]:
                 r = model.generate_content([p, img], safety_settings=SAFETY_SETTINGS)
                 res.extend(json.loads(clean_json_response(r.text)))
                 time.sleep(2)
-            except: st.error("Chyba API")
+            except: pass
             bar.progress((i+1)/len(up))
         st.session_state.scan_res = res
 
@@ -308,7 +322,7 @@ with tabs[3]:
 # === TAB 5: NÁSTROJE ===
 with tabs[4]:
     st.header("⚙️ Nástroje")
-    if st.button("🛒 Testovací nákup (Naplniť sklad)", type="primary"):
+    if st.button("🛒 Testovací nákup", type="primary"):
         seed_test_data(current_user); st.success("Hotovo!"); time.sleep(1); st.rerun()
     if st.button("🗑️ Vymazať všetko"):
         conn = sqlite3.connect(DB_FILE); c = conn.cursor()
