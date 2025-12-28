@@ -10,8 +10,7 @@ from datetime import datetime
 import time
 
 # --- 1. KONFIGURÁCIA ---
-# ZMENA: Úplne nová DB, aby sme vylúčili poškodené dáta
-DB_FILE = "sklad_final_v78.db"
+DB_FILE = "sklad_v7_9.db" # Nová DB pre tento veľký nákup
 
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -54,7 +53,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, is_premium INTEGER DEFAULT 0, last_updated TEXT)''')
-    # Veľmi jednoduchá tabuľka inventory
     c.execute('''CREATE TABLE IF NOT EXISTS inventory (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         owner TEXT, 
@@ -128,13 +126,58 @@ def get_full_log(owner):
     conn.close()
     return df
 
+# === VEĽKÝ NÁKUP (~150€) ===
 def seed_test_data(owner):
-    data = [("Mlieko", "Mliečne", 1000), ("Vajcia", "Mliečne", 500), ("Chlieb", "Trvanlivé", 800)]
-    conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-    d = datetime.now().strftime("%Y-%m-%d")
-    for n, k, v in data:
-        c.execute("INSERT INTO inventory (owner, nazov, kategoria, vaha_g, kcal_100g, datum_pridania) VALUES (?,?,?,?,100,?)", (owner, n, k, v, d))
-    conn.commit(); conn.close()
+    # Zoznam cca 35 položiek, mix všetkých kategórií
+    nakup = [
+        # Mäso a Ryby
+        {"nazov": "Kuracie prsia", "kategoria": "Mäso", "vaha_g": 1500, "kcal_100g": 165},
+        {"nazov": "Hovädzie mleté", "kategoria": "Mäso", "vaha_g": 1000, "kcal_100g": 250},
+        {"nazov": "Bravčové karé", "kategoria": "Mäso", "vaha_g": 800, "kcal_100g": 240},
+        {"nazov": "Losos filet", "kategoria": "Mäso", "vaha_g": 500, "kcal_100g": 208},
+        {"nazov": "Šunka výberová", "kategoria": "Mäso", "vaha_g": 400, "kcal_100g": 110},
+        
+        # Mliečne a Vajcia
+        {"nazov": "Mlieko polotučné (4ks)", "kategoria": "Mliečne", "vaha_g": 4000, "kcal_100g": 47},
+        {"nazov": "Vajcia L (30ks)", "kategoria": "Mliečne", "vaha_g": 1800, "kcal_100g": 155},
+        {"nazov": "Maslo", "kategoria": "Mliečne", "vaha_g": 500, "kcal_100g": 717},
+        {"nazov": "Syr Eidam blok", "kategoria": "Mliečne", "vaha_g": 500, "kcal_100g": 350},
+        {"nazov": "Jogurt biely (veľký)", "kategoria": "Mliečne", "vaha_g": 1000, "kcal_100g": 60},
+        {"nazov": "Tvaroh jemný", "kategoria": "Mliečne", "vaha_g": 500, "kcal_100g": 90},
+        {"nazov": "Smotana na varenie", "kategoria": "Mliečne", "vaha_g": 500, "kcal_100g": 200},
+        {"nazov": "Mozzarella (3ks)", "kategoria": "Mliečne", "vaha_g": 375, "kcal_100g": 280},
+
+        # Zelenina
+        {"nazov": "Zemiaky (vrece)", "kategoria": "Zelenina", "vaha_g": 5000, "kcal_100g": 77},
+        {"nazov": "Cibuľa žltá", "kategoria": "Zelenina", "vaha_g": 2000, "kcal_100g": 40},
+        {"nazov": "Mrkva", "kategoria": "Zelenina", "vaha_g": 1000, "kcal_100g": 41},
+        {"nazov": "Paradajky", "kategoria": "Zelenina", "vaha_g": 1000, "kcal_100g": 18},
+        {"nazov": "Paprika červená", "kategoria": "Zelenina", "vaha_g": 600, "kcal_100g": 26},
+        {"nazov": "Uhorka šalátová", "kategoria": "Zelenina", "vaha_g": 800, "kcal_100g": 15},
+        {"nazov": "Cesnak", "kategoria": "Zelenina", "vaha_g": 200, "kcal_100g": 149},
+        {"nazov": "Špenát čerstvý", "kategoria": "Zelenina", "vaha_g": 250, "kcal_100g": 23},
+
+        # Ovocie
+        {"nazov": "Jablká", "kategoria": "Ovocie", "vaha_g": 2000, "kcal_100g": 52},
+        {"nazov": "Banány", "kategoria": "Ovocie", "vaha_g": 1500, "kcal_100g": 89},
+        {"nazov": "Citróny", "kategoria": "Ovocie", "vaha_g": 500, "kcal_100g": 29},
+
+        # Trvanlivé a Špajza
+        {"nazov": "Ryža Basmati", "kategoria": "Trvanlivé", "vaha_g": 2000, "kcal_100g": 365},
+        {"nazov": "Cestoviny (3 druhy)", "kategoria": "Trvanlivé", "vaha_g": 1500, "kcal_100g": 350},
+        {"nazov": "Múka hladká", "kategoria": "Trvanlivé", "vaha_g": 2000, "kcal_100g": 360},
+        {"nazov": "Cukor kryštál", "kategoria": "Trvanlivé", "vaha_g": 1000, "kcal_100g": 400},
+        {"nazov": "Olej slnečnicový", "kategoria": "Trvanlivé", "vaha_g": 1000, "kcal_100g": 884},
+        {"nazov": "Olivový olej", "kategoria": "Trvanlivé", "vaha_g": 500, "kcal_100g": 884},
+        {"nazov": "Tuniak konzerva (3ks)", "kategoria": "Trvanlivé", "vaha_g": 480, "kcal_100g": 130},
+        {"nazov": "Fazuľa v konzerve", "kategoria": "Trvanlivé", "vaha_g": 800, "kcal_100g": 100},
+        {"nazov": "Paradajkový pretlak", "kategoria": "Trvanlivé", "vaha_g": 500, "kcal_100g": 30},
+        
+        # Ostatné
+        {"nazov": "Chlieb pšeničný", "kategoria": "Iné", "vaha_g": 1000, "kcal_100g": 260},
+        {"nazov": "Káva zrnková", "kategoria": "Iné", "vaha_g": 500, "kcal_100g": 1}
+    ]
+    add_to_inventory(nakup, owner)
 
 def cook_recipe(name, kcal, ingredients, owner):
     conn = sqlite3.connect(DB_FILE); c = conn.cursor()
@@ -147,14 +190,14 @@ def cook_recipe(name, kcal, ingredients, owner):
     conn.commit(); conn.close()
 
 # --- 4. UI APLIKÁCIE ---
-st.set_page_config(page_title="Smart Food v7.8", layout="wide", page_icon="🥗")
+st.set_page_config(page_title="Smart Food v7.9", layout="wide", page_icon="🥗")
 init_db()
 
 if 'username' not in st.session_state: st.session_state.username = None
 if 'recipes' not in st.session_state: st.session_state.recipes = []
 
 if not st.session_state.username:
-    st.title("🥗 Smart Food v7.8 (Bare Metal)")
+    st.title("🥗 Smart Food v7.9")
     name = st.text_input("Meno:")
     if st.button("Štart") and name:
         st.session_state.username = name
@@ -165,35 +208,31 @@ if not st.session_state.username:
 current_user = st.session_state.username
 tabs = st.tabs(["📦 Sklad", "➕ Skenovať", "👨‍🍳 Kuchyňa", "📊 Prehľad", "⚙️ Nástroje"])
 
-# === TAB 1: SKLAD (ABSOLUTE SAFE MODE) ===
+# === TAB 1: SKLAD (SAFE MODE) ===
 with tabs[0]:
     df = get_inventory(current_user)
     
     if df.empty:
-        st.info("Sklad je prázdny.")
+        st.info("Sklad je prázdny. Choď do záložky 'Nástroje' a spusti Veľký Nákup.")
     else:
-        # Pripravíme dáta - ŽIADNE ŠPECIÁLNE TYPY, LEN ČISTÉ DÁTA
-        # Streamlit editor potrebuje čisté typy
+        # Pripravíme dáta
         df['vaha_g'] = df['vaha_g'].astype(float)
         df['nazov'] = df['nazov'].astype(str)
         df['kategoria'] = df['kategoria'].astype(str)
         
-        # Zobrazíme len to čo treba
         display_df = df[['id', 'nazov', 'kategoria', 'vaha_g']].copy()
         
-        st.write("📝 **Skladové zásoby** (Prepíš váhu a stlač Enter)")
+        st.write("📝 **Stav zásob**")
         
-        # !!! TOTO JE KĽÚČOVÁ ZMENA: Žiadne column_config, nový key !!!
+        # EDITOR
         edited_df = st.data_editor(
             display_df,
-            key="final_editor_v78",  # Nový kľúč vymaže staré chyby z cache
+            key="editor_v79", 
             num_rows="dynamic",
             use_container_width=True
         )
         
         # Detekcia zmien
-        # Porovnáme pôvodné dáta s upravenými
-        # Iterate over rows in edited_df
         for index, row in edited_df.iterrows():
             original_row = df[df['id'] == row['id']]
             if not original_row.empty:
@@ -202,31 +241,26 @@ with tabs[0]:
                 
                 if old_weight != new_weight:
                     update_inventory_weight(row['id'], new_weight, current_user)
-                    st.toast(f"Zmenené: {row['nazov']}")
+                    st.toast(f"Aktualizované: {row['nazov']}")
                     time.sleep(0.5)
                     st.rerun()
                     
         st.divider()
         st.write("🛠 **Rýchle akcie**")
-        # Výber pre akcie cez selectbox namiesto klikania do tabuľky (stabilnejšie)
-        selected_item_name = st.selectbox("Vyber surovinu na akciu:", display_df['nazov'].tolist())
+        selected_item_name = st.selectbox("Vyber surovinu:", display_df['nazov'].tolist())
         
         if selected_item_name:
-            # Nájdi ID
             item_row = df[df['nazov'] == selected_item_name].iloc[0]
             c1, c2, c3 = st.columns(3)
             
             if c1.button(f"Zjesť 100g"):
-                quick_consume(item_row['id'], 100, current_user)
-                st.rerun()
+                quick_consume(item_row['id'], 100, current_user); st.rerun()
             
             if c2.button(f"Minúť všetko"):
-                quick_consume(item_row['id'], item_row['vaha_g'], current_user)
-                st.rerun()
+                quick_consume(item_row['id'], item_row['vaha_g'], current_user); st.rerun()
                 
             if c3.button("Vyhodiť"):
-                delete_item(item_row['id'], current_user)
-                st.rerun()
+                delete_item(item_row['id'], current_user); st.rerun()
 
 # === TAB 2: SKENOVANIE ===
 with tabs[1]:
@@ -283,8 +317,13 @@ with tabs[3]:
 # === TAB 5: NÁSTROJE ===
 with tabs[4]:
     st.header("⚙️ Nástroje")
-    if st.button("🛒 Testovací nákup", type="primary"):
-        seed_test_data(current_user); st.success("Hotovo!"); time.sleep(1); st.rerun()
+    # TLAČIDLO PRE VEĽKÝ NÁKUP
+    if st.button("🛒 Veľký nákup (150€)", type="primary"):
+        seed_test_data(current_user)
+        st.success("Sklad bol naplnený až po strop!")
+        time.sleep(1)
+        st.rerun()
+        
     if st.button("🗑️ Vymazať všetko"):
         conn = sqlite3.connect(DB_FILE); c = conn.cursor()
         c.execute("DELETE FROM inventory WHERE owner=?", (current_user,)); conn.commit(); conn.close()
